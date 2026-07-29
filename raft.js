@@ -78,7 +78,7 @@ const BUILDINGS = {
   mast: {
     key: 'mast', name: 'Mástil', icon: '🏴', category: 'advanced',
     cost: { wood: 8, metal: 4, rope: 4 },
-    desc: 'Permite construir una vela mayor.',
+    desc: 'Amplifica la señal de una radio operativa; sin radio no tiene efecto.',
     weight: 1.5, health: 60, provides: { mast: 1 }
   },
   shelter: {
@@ -358,6 +358,46 @@ class Raft {
     return visited.size === remaining.length;
   }
 
+  // Ruta más corta entre dos celdas ocupadas, moviéndose solo en los cuatro
+  // ejes cardinales. Incluye tanto la celda inicial como la celda de destino.
+  findPath(startGx, startGy, targetGx, targetGy) {
+    if (![startGx, startGy, targetGx, targetGy].every(Number.isInteger)) return null;
+
+    const startKey = this.key(startGx, startGy);
+    const targetKey = this.key(targetGx, targetGy);
+    if (!this.grid.has(startKey) || !this.grid.has(targetKey)) return null;
+    if (startKey === targetKey) return [{ gx: startGx, gy: startGy }];
+
+    const pending = [startKey];
+    const cameFrom = new Map([[startKey, null]]);
+    let pendingIndex = 0;
+
+    while (pendingIndex < pending.length) {
+      const currentKey = pending[pendingIndex++];
+      const [gx, gy] = currentKey.split(',').map(Number);
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nextKey = this.key(gx + dx, gy + dy);
+        if (!this.grid.has(nextKey) || cameFrom.has(nextKey)) continue;
+
+        cameFrom.set(nextKey, currentKey);
+        if (nextKey === targetKey) {
+          const path = [];
+          let pathKey = targetKey;
+          while (pathKey !== null) {
+            const [pathGx, pathGy] = pathKey.split(',').map(Number);
+            path.push({ gx: pathGx, gy: pathGy });
+            pathKey = cameFrom.get(pathKey);
+          }
+          path.reverse();
+          return path;
+        }
+        pending.push(nextKey);
+      }
+    }
+
+    return null;
+  }
+
   removeDetachedCells() {
     if (this.grid.size <= 1) return 0;
     const unvisited = new Set(this.grid.keys());
@@ -465,12 +505,32 @@ class Raft {
   totalAutoWater() { return this.countProvides('rainWater') + this.countProvides('purifiedWater'); }
   totalShelter() { return this.countProvides('shelter'); }
 
-  takeDamage(amount) {
+  takeDamage(amount, impactX = null, impactZ = null) {
     const shelter = this.totalShelter();
     if (shelter > 0) amount *= Math.max(0.3, 1 - shelter * 0.25);
     const cells = Array.from(this.grid.entries());
     if (!cells.length) return 0;
-    const target = Util.choice(cells);
+
+    let target;
+    if (Number.isFinite(impactX) && Number.isFinite(impactZ)) {
+      const cs = this.cellSize;
+      let closestDistanceSq = Infinity;
+      for (const entry of cells) {
+        const [gx, gy] = entry[0].split(',').map(Number);
+        const nearestX = Util.clamp(impactX, gx * cs, (gx + 1) * cs);
+        const nearestZ = Util.clamp(impactZ, gy * cs, (gy + 1) * cs);
+        const dx = impactX - nearestX;
+        const dz = impactZ - nearestZ;
+        const distanceSq = dx * dx + dz * dz;
+        if (distanceSq < closestDistanceSq) {
+          closestDistanceSq = distanceSq;
+          target = entry;
+        }
+      }
+    } else {
+      target = Util.choice(cells);
+    }
+
     this.lastDetached = 0;
     target[1].health -= amount;
     this.tintDamaged(target[1]);

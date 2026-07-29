@@ -161,9 +161,68 @@ test('guardado v2 migra v1, sanea valores y recupera preferencias corruptas', ()
   sandbox.localStorage.setItem('aladeriva3d_prefs_v2', 'null');
   sandbox.localStorage.setItem('aladeriva3d_prefs_v1', '{dañado');
   assert.deepEqual({ ...run(sandbox, 'Save.loadPrefs()') }, { sound: true });
+});
 
-  sandbox.localStorage.setItem('aladeriva3d_save_v2', '{"schemaVersion":999,"day":8}');
+test('un slot futuro bloquea fallback y escrituras sin destruir ninguna copia', () => {
+  const { sandbox } = createSandbox();
+  load(sandbox, 'save.js');
+  const futureRaw = '{"schemaVersion":999,"day":8,"futureOnly":{"cargo":42}}';
+  const legacyRaw = '{"day":4,"player":{"health":80}}';
+  sandbox.localStorage.setItem('aladeriva3d_save_v2', futureRaw);
+  sandbox.localStorage.setItem('aladeriva3d_save_v1', legacyRaw);
+
+  assert.equal(run(sandbox, 'Save.hasIncompatibleCurrent()'), true);
+  assert.equal(run(sandbox, 'Save.exists()'), true);
   assert.equal(run(sandbox, 'Save.load()'), null);
+  assert.equal(sandbox.localStorage.getItem('aladeriva3d_save_v2'), futureRaw);
+  assert.equal(sandbox.localStorage.getItem('aladeriva3d_save_v1'), legacyRaw);
+
+  assert.equal(run(sandbox, 'Save.save({ day: 99 })'), false);
+  assert.equal(sandbox.localStorage.getItem('aladeriva3d_save_v2'), futureRaw);
+  assert.equal(sandbox.localStorage.getItem('aladeriva3d_save_v1'), legacyRaw);
+});
+
+test('un slot demasiado grande se conserva como incompatible', () => {
+  const { sandbox } = createSandbox();
+  load(sandbox, 'save.js');
+  const oversizedRaw = JSON.stringify({
+    schemaVersion: 999,
+    futureOnly: 'x'.repeat(512 * 1024)
+  });
+  const legacyRaw = '{"day":4,"player":{"health":80}}';
+  sandbox.localStorage.setItem('aladeriva3d_save_v2', oversizedRaw);
+  sandbox.localStorage.setItem('aladeriva3d_save_v1', legacyRaw);
+
+  assert.equal(run(sandbox, 'Save.inspectCurrent().status'), 'oversize');
+  assert.equal(run(sandbox, 'Save.hasIncompatibleCurrent()'), true);
+  assert.equal(run(sandbox, 'Save.exists()'), true);
+  assert.equal(run(sandbox, 'Save.load()'), null);
+  assert.equal(run(sandbox, 'Save.save({ day: 99 })'), false);
+  assert.equal(
+    sandbox.localStorage.getItem('aladeriva3d_save_v2'),
+    oversizedRaw
+  );
+  assert.equal(
+    sandbox.localStorage.getItem('aladeriva3d_save_v1'),
+    legacyRaw
+  );
+});
+
+test('un slot actual realmente corrupto permite recuperar y migrar el legacy', () => {
+  const { sandbox } = createSandbox();
+  load(sandbox, 'save.js');
+  sandbox.localStorage.setItem('aladeriva3d_save_v2', '{guardado-roto');
+  sandbox.localStorage.setItem('aladeriva3d_save_v1', JSON.stringify({
+    day: 6,
+    resources: { water: 5 }
+  }));
+
+  assert.equal(run(sandbox, 'Save.hasIncompatibleCurrent()'), false);
+  const loaded = run(sandbox, 'Save.load()');
+  assert.equal(loaded.day, 6);
+  assert.equal(loaded.schemaVersion, 2);
+  assert.equal(JSON.parse(sandbox.localStorage.getItem('aladeriva3d_save_v2')).day, 6);
+  assert.equal(sandbox.localStorage.getItem('aladeriva3d_save_v1'), null);
 });
 
 test('autoguardado desacoplado responde a pagehide/visibility y respeta el estado', () => {
@@ -239,6 +298,37 @@ test('Input táctil mantiene acciones continuas y evita clic al arrastrar', () =
   env.canvas.dispatchEvent({
     type: 'pointerup', pointerType: 'touch', pointerId: 6, clientX: 150, clientY: 260, timeStamp: 980
   });
+  assert.equal(run(env.sandbox, 'Input.mouse.clicked'), false);
+
+  run(env.sandbox, `
+    Input.keys.KeyW = true;
+    Input.held.KeyW = true;
+    Input.virtualPulses.add('KeyE');
+    Input.touchPointer = { id: 7 };
+    Input.mouse.down = true;
+    Input.mouse.clicked = true;
+    Input.mouse.rightClicked = true;
+  `);
+  env.move.classList.add('is-held');
+  env.windowTarget.dispatchEvent({ type: 'blur' });
+  assert.equal(run(env.sandbox, 'Object.keys(Input.keys).length'), 0);
+  assert.equal(run(env.sandbox, 'Object.keys(Input.held).length'), 0);
+  assert.equal(run(env.sandbox, 'Input.virtualPulses.size'), 0);
+  assert.equal(run(env.sandbox, 'Input.touchPointer'), null);
+  assert.equal(run(env.sandbox, 'Input.mouse.down'), false);
+  assert.equal(run(env.sandbox, 'Input.mouse.clicked'), false);
+  assert.equal(run(env.sandbox, 'Input.mouse.rightClicked'), false);
+  assert.equal(env.move.classList.contains('is-held'), false);
+
+  run(env.sandbox, `
+    Input.keys.KeyA = true;
+    Input.held.KeyA = true;
+    Input.mouse.clicked = true;
+  `);
+  env.documentTarget.hidden = true;
+  env.documentTarget.dispatchEvent({ type: 'visibilitychange' });
+  assert.equal(run(env.sandbox, 'Object.keys(Input.keys).length'), 0);
+  assert.equal(run(env.sandbox, 'Object.keys(Input.held).length'), 0);
   assert.equal(run(env.sandbox, 'Input.mouse.clicked'), false);
 });
 

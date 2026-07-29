@@ -1,10 +1,10 @@
 {
   "name": "a-la-deriva-3d",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "private": true,
   "scripts": {
     "test": "npm run test:unit",
-    "test:unit": "node tests/gameplay.test.js && node tests/world-camera.test.js && node tests/world-sea-performance.test.js && node tests/gpu-resources.test.js && node tests/platform.test.js",
+    "test:unit": "node tests/gameplay.test.js && node tests/world-camera.test.js && node tests/world-sea-performance.test.js && node tests/gpu-resources.test.js && node tests/platform.test.js && node tests/ui-feedback.test.js",
     "test:e2e": "playwright test",
     "test:all": "npm run test:unit && npm run test:e2e",
     "serve": "node tests/serve.mjs"

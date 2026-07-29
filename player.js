@@ -98,8 +98,9 @@ const PlayerVis = {
     const bob = moving ? Math.abs(Math.sin(PlayerVis.walkTime)) * 0.08 : Math.sin(time * 2) * 0.015;
     m.position.set(p.x, 0.35 + bob, p.z);
 
-    if (p.rowTarget) {
-      // Postura de remo: inclinado hacia adelante, brazos al agua
+    if ((p.rowAnim || 0) > 0) {
+      // Postura breve de remo después de cada palada. El trayecto automático
+      // hasta el borde conserva la animación de caminar.
       m.rotation.x = 0.3;
       if (PlayerVis.rod) PlayerVis.rod.visible = false;
       const rowSwing = Math.sin(time * 8) * 0.35;

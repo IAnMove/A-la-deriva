@@ -374,6 +374,7 @@ class Survivor {
 }
 
 const CrewManager = {
+  MAX_MEMBERS: 64,
   members: [],
 
   reset: () => {
@@ -382,7 +383,11 @@ const CrewManager = {
   },
 
   add: (survivor) => {
+    if (!survivor || CrewManager.members.length >= CrewManager.MAX_MEMBERS) {
+      return false;
+    }
     CrewManager.members.push(survivor);
+    return true;
   },
 
   removeMesh: (m) => {
@@ -397,13 +402,51 @@ const CrewManager = {
     m.mesh = null;
   },
 
+  getVisualOffset: (member, raft, cellOccupants = null) => {
+    const occupants = cellOccupants || CrewManager.members.filter(
+      candidate => candidate.alive &&
+        candidate.gx === member.gx &&
+        candidate.gy === member.gy
+    );
+    const index = Math.max(0, occupants.indexOf(member));
+    const playerCell = typeof Game !== 'undefined' && Game.player &&
+      Game.raft === raft
+      ? raft.worldToGrid(Game.player.x, Game.player.z)
+      : null;
+    const sharesWithPlayer = playerCell?.gx === member.gx &&
+      playerCell?.gy === member.gy;
+    if (!sharesWithPlayer && occupants.length <= 1) return { x: 0, z: 0 };
+
+    const count = Math.max(occupants.length, 1);
+    const angle = -Math.PI * 0.75 + index * (Math.PI * 2 / count);
+    const radius = sharesWithPlayer ? 0.58 : 0.42;
+    return {
+      x: Math.cos(angle) * radius,
+      z: Math.sin(angle) * radius
+    };
+  },
+
   // Crea/actualiza las figuras 3D de la tripulación sobre la balsa
   syncMeshes: (raft) => {
     const cs = raft.cellSize;
+    for (const member of CrewManager.members) {
+      if (!member.alive) {
+        CrewManager.removeMesh(member);
+        continue;
+      }
+      if (member.gx == null || !raft.has(member.gx, member.gy)) {
+        CrewManager.assignPosition(member, raft);
+      }
+    }
+    const occupantsByCell = new Map();
+    for (const member of CrewManager.members) {
+      if (!member.alive || member.gx == null || member.gy == null) continue;
+      const key = `${member.gx},${member.gy}`;
+      if (!occupantsByCell.has(key)) occupantsByCell.set(key, []);
+      occupantsByCell.get(key).push(member);
+    }
     for (const m of CrewManager.members) {
-      if (!m.alive) { CrewManager.removeMesh(m); continue; }
-      if (m.gx == null || !raft.has(m.gx, m.gy)) CrewManager.assignPosition(m, raft);
-      if (m.gx == null) continue;
+      if (!m.alive || m.gx == null) continue;
       if (!m.mesh) {
         m.mesh = makeHumanoidMesh(0xd84315, { hair: Util.choice([0x4e342e, 0x212121, 0x8d6e63, 0x6d4c41, 0x5d4037]) });
         raft.group.add(m.mesh);
@@ -411,7 +454,16 @@ const CrewManager = {
       }
       // Balanceo suave en reposo
       const sway = Math.sin(performance.now() / 600 + m.mesh.userData.phase) * 0.02;
-      m.mesh.position.set((m.gx + 0.5) * cs, 0.35 + Math.abs(sway), (m.gy + 0.5) * cs);
+      const offset = CrewManager.getVisualOffset(
+        m,
+        raft,
+        occupantsByCell.get(`${m.gx},${m.gy}`) || [m]
+      );
+      m.mesh.position.set(
+        (m.gx + 0.5) * cs + offset.x,
+        0.35 + Math.abs(sway),
+        (m.gy + 0.5) * cs + offset.z
+      );
       m.mesh.rotation.y += (m.mesh.userData.phase + Math.PI - m.mesh.rotation.y) * 0.01;
     }
   },

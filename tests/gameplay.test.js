@@ -117,6 +117,14 @@ test('Game delega simulación e interfaz en módulos independientes', () => {
   assert.equal(run('typeof GameUI.showDaySummary'), 'function');
   assert.equal(run('typeof GameRenderer.draw'), 'function');
   assert.match(gameSource, /update: \(dt\) => GameSimulation\.update\(Game, dt\)/);
+  assert.match(
+    gameSource,
+    /updatePlayer: \(dt\) => GameSimulation\.updatePlayer\(Game, dt\)/
+  );
+  assert.match(
+    gameSource,
+    /offerIslandRoute: \(\) => GameSimulation\.offerIslandRoute\(Game\)/
+  );
   assert.match(gameSource, /updateUI: \(\) => GameUI\.updateUI\(Game\)/);
   assert.doesNotMatch(gameSource, /const SURVIVAL_BALANCE/);
   assert.doesNotMatch(gameSource, /const NAVIGATION_BALANCE/);
@@ -383,6 +391,23 @@ test('timón, remo y combustible alteran la navegación', () => {
   assert.equal(run('brokenMotorDayFixture.fuelConsumed'), 0);
 });
 
+test('llegar a la isla gana aunque la propulsión se rompa al final', () => {
+  resetRaft([
+    ['0,0', 'sail', 0],
+    ['1,0', 'rudder', 0]
+  ]);
+  run(`
+    Game.state = 'playing';
+    Game.victoryCondition = 'island';
+    Game.islandDistance = 0;
+    var finalArrivalFixture = Game.resolveNavigationDay();
+    var finalArrivalStateFixture = Game.state;
+    Game.state = 'playing';
+  `);
+  assert.equal(run('finalArrivalFixture.arrived'), true);
+  assert.equal(run('finalArrivalStateFixture'), 'end');
+});
+
 test('clima, controles, pausa y menús', () => {
   run(`
     Game.time = 16; Game.zone = 'calm';
@@ -423,6 +448,88 @@ test('clima, controles, pausa y menús', () => {
   assert.equal(run('Game.player.hook.returning'), true);
 });
 
+test('movimiento por rutas, cámara relativa y remo agotado sin spam', () => {
+  resetRaft([
+    ['0,0', 'floor', 50],
+    ['1,0', 'floor', 50],
+    ['2,0', 'floor', 50],
+    ['2,1', 'floor', 50],
+    ['2,2', 'floor', 50]
+  ]);
+  run(`
+    Game.resetPlayerState({ x: 1, z: 1 });
+    Input.keys = {};
+    Input.held = {};
+    var concavePathFixture = Game.raft.findPath(0, 0, 2, 2);
+    var plannedConcaveFixture = Game.planPlayerPath(2, 2);
+    for (var pathFrameFixture = 0; pathFrameFixture < 180; pathFrameFixture++) {
+      Game.updatePlayer(0.05);
+    }
+    var pathArrivalFixture = Game.raft.worldToGrid(Game.player.x, Game.player.z);
+  `);
+  assert.equal(run('plannedConcaveFixture'), true);
+  assert.equal(run('concavePathFixture.length'), 5);
+  assert.deepEqual(
+    { ...run('pathArrivalFixture') },
+    { gx: 2, gy: 2 }
+  );
+  assert.equal(run('Game.player.moveTarget'), null);
+  run(`
+    Game.player.x = 999;
+    Game.player.z = 999;
+    Game.player.rowTarget = {
+      x: 4.8, z: 4.8, gx: 2, gy: 2, pushX: -1, pushZ: 0
+    };
+    Game.ensurePlayerOnRaft();
+  `);
+  assert.equal(run('Game.player.rowTarget'), null);
+
+  resetRaft([
+    ['0,0', 'floor', 50], ['1,0', 'floor', 50], ['2,0', 'floor', 50],
+    ['0,1', 'floor', 50], ['1,1', 'floor', 50], ['2,1', 'floor', 50],
+    ['0,2', 'floor', 50], ['1,2', 'floor', 50], ['2,2', 'floor', 50]
+  ]);
+  run(`
+    Game.resetPlayerState({ x: 3, z: 3 });
+    World.cameraYaw = Math.PI / 4;
+    Input.held = { KeyW: true };
+    Input.keys = {};
+    Game.updatePlayer(0.1);
+    var cameraMoveXFixture = Game.player.x - 3;
+    var cameraMoveZFixture = Game.player.z - 3;
+    Input.held = {};
+    World.cameraYaw = 0;
+
+    var rowingMessageFixture = Game.showFloatingText;
+    var rowingMessageCountFixture = 0;
+    Game.showFloatingText = () => { rowingMessageCountFixture++; };
+    Game.player.stamina = 0;
+    Game.rowingCooldown = 0;
+    for (var exhaustedFrameFixture = 0; exhaustedFrameFixture < 60; exhaustedFrameFixture++) {
+      Game.row();
+      Game.rowingCooldown = Math.max(0, Game.rowingCooldown - 0.016);
+    }
+    Game.showFloatingText = rowingMessageFixture;
+  `);
+  assert.ok(run('cameraMoveXFixture') < -0.3);
+  assert.ok(run('cameraMoveZFixture') < -0.3);
+  assert.ok(run('rowingMessageCountFixture') <= 2);
+});
+
+test('los impactos localizados dañan el módulo alcanzado', () => {
+  resetRaft([
+    ['0,0', 'floor', 50],
+    ['5,0', 'radio', 35]
+  ]);
+  run(`
+    Game.raft.takeDamage(12, 11, 1);
+    var farFloorHealthFixture = Game.raft.get(0, 0).health;
+    var impactedRadioHealthFixture = Game.raft.get(5, 0).health;
+  `);
+  assert.equal(run('farFloorHealthFixture'), 50);
+  assert.equal(run('impactedRadioHealthFixture'), 23);
+});
+
 test('habilidades, carga, almacenamiento e interfaz', () => {
   run(`
     var skilledFixture = new Survivor();
@@ -448,28 +555,92 @@ test('habilidades, carga, almacenamiento e interfaz', () => {
   assert.equal(run("Util.resourceName('wood')"), 'madera');
 });
 
+test('la tripulación no se superpone al jugador en una sola tabla', () => {
+  resetRaft([['0,0', 'floor', 50]]);
+  run(`
+    Game.resetPlayerState({ x: 1, z: 1 });
+    var crowdedCrewFixture = new Survivor();
+    crowdedCrewFixture.gx = 0;
+    crowdedCrewFixture.gy = 0;
+    CrewManager.members = [crowdedCrewFixture];
+    var crowdedOffsetFixture = CrewManager.getVisualOffset(crowdedCrewFixture, Game.raft);
+  `);
+  assert.ok(
+    Math.hypot(
+      run('crowdedOffsetFixture.x'),
+      run('crowdedOffsetFixture.z')
+    ) >= 0.5
+  );
+  run(`
+    CrewManager.members = Array.from(
+      { length: CrewManager.MAX_MEMBERS },
+      () => new Survivor()
+    );
+    var rejectedCrewFixture = CrewManager.add(new Survivor());
+  `);
+  assert.equal(run('rejectedCrewFixture'), false);
+  assert.equal(
+    run('CrewManager.members.length'),
+    run('CrewManager.MAX_MEMBERS')
+  );
+});
+
 test('guardados inválidos se sanean', () => {
   run(`
+    Game.raft.selected = { gx: 4, gy: 0 };
+    Game.rowingBoost = 3.5;
+    Game.rowingBoostZ = 2;
+    Game.rowingCooldown = 1.5;
+    Game.hallucinationTimer = -4;
     Game.loadFromSave({
       day: 'incorrecto', time: 99, zone: 'zona-inexistente',
-      player: { x: 'NaN', health: -20, foodCredit: 99 },
+      player: { x: 'NaN', health: -20, foodCredit: 99, speed: 0, hookRange: 999 },
       resources: { wood: -4, water: '2.5', fuel: -8 },
       navigationHeading: 99,
       raftGrid: [
+        null,
         ['0,0', { buildingKey: 'floor', health: 25 }],
+        ['0.5,0', { buildingKey: 'radio', health: 35 }],
+        ['1001,0', { buildingKey: 'radio', health: 35 }],
         ['4,0', { buildingKey: 'radio', health: 999 }]
       ],
-      crew: [{}]
+      crew: [null, 7, 'fantasma', {}]
     });
   `);
   assert.equal(run('Game.day'), 1);
   assert.equal(run('Game.time'), 23.99);
   assert.equal(run('Game.player.x'), 1);
   assert.equal(run('Game.player.foodCredit'), 1);
+  assert.equal(run('Game.player.speed'), 6);
+  assert.equal(run('Game.player.hookRange'), 8);
   assert.equal(run('Game.resources.wood'), 0);
   assert.equal(run('Game.resources.fuel'), 0);
   assert.equal(run('Game.navigationHeading'), 1);
   assert.equal(run('Game.raft.grid.size'), 1);
+  assert.equal(run('Game.raft.selected'), null);
+  assert.equal(run('Game.rowingBoost'), 0);
+  assert.equal(run('Game.rowingBoostZ'), 0);
+  assert.equal(run('Game.rowingCooldown'), 0);
+  assert.equal(run('Game.hallucinationTimer'), 0);
+  assert.equal(run('CrewManager.members.length'), 1);
+
+  run(`
+    Game.loadFromSave({
+      islandDistance: 0,
+      victoryCondition: 'island',
+      raftGrid: [['0.5,0', { buildingKey: 'floor', health: 50 }]],
+      crew: [null, 7, 'fantasma']
+    });
+    var fallbackCellFixture = Game.raft.has(0, 0);
+    var fallbackPlayerCellFixture =
+      Game.raft.worldToGrid(Game.player.x, Game.player.z);
+  `);
+  assert.equal(run('fallbackCellFixture'), true);
+  assert.equal(run('Game.raft.grid.size'), 1);
+  assert.equal(run('Game.islandDistance'), 0);
+  assert.equal(run('fallbackPlayerCellFixture.gx'), 0);
+  assert.equal(run('fallbackPlayerCellFixture.gy'), 0);
+  assert.equal(run('CrewManager.members.length'), 0);
 });
 
 test('historias de náufragos aportan valor y riesgo persistente', () => {
@@ -681,6 +852,206 @@ test('eventos y rutas finales son alcanzables', () => {
   `);
   assert.ok(run('lossDaysFixture') <= 7);
   assert.equal(run('Game.state'), 'end');
+});
+
+test('el daño letal por hambre o sed no se cura después de morir', () => {
+  resetRaft([
+    ['0,0', 'bed', 30],
+    ['1,0', 'medkit', 30],
+    ['2,0', 'purifier', 40]
+  ]);
+  run(`
+    var lethalEventsFixture = Game.pickDailyEvents;
+    var lethalSummaryFixture = Game.showDaySummary;
+    Game.pickDailyEvents = () => [];
+    Game.showDaySummary = () => {};
+    CrewManager.members = [];
+    Game.resetPlayerState({
+      x: 1, z: 1, health: 5, hunger: 0, thirst: 0,
+      morale: 80, sanity: 100
+    });
+    Game.resources = {
+      wood: 0, plastic: 0, cloth: 0, metal: 0,
+      rope: 0, food: 0, water: 0, fuel: 0
+    };
+    Game.day = 8;
+    Game.zone = 'debris';
+    Game.storm = false;
+    Game.state = 'playing';
+    Game.endDay();
+    var lethalStateFixture = Game.state;
+    var lethalHealthFixture = Game.player.health;
+    Game.pickDailyEvents = lethalEventsFixture;
+    Game.showDaySummary = lethalSummaryFixture;
+  `);
+  assert.equal(run('lethalStateFixture'), 'end');
+  assert.equal(run('lethalHealthFixture'), 0);
+});
+
+test('vela y radio activan rutas coherentes y conservan el progreso al cambiar', () => {
+  resetRaft([
+    ['0,0', 'sail', 40],
+    ['1,0', 'rudder', 45]
+  ]);
+  run(`
+    Game.state = 'playing';
+    Game.paused = false;
+    Game.resetPlayerState({ x: 1, z: 1 });
+    Game.resources = {
+      wood: 0, plastic: 0, cloth: 0, metal: 0,
+      rope: 0, food: 2, water: 2.6, fuel: 0
+    };
+    Game.victoryCondition = null;
+    Game.islandDistance = 2000;
+    Game.navigationIntel = 0;
+    var routeDecisionFixture = Game.showDecision;
+    var routeOptionsFixture = null;
+    Game.showDecision = (title, text, options) => {
+      routeOptionsFixture = options;
+    };
+    Game.interact();
+    routeOptionsFixture[0].action();
+    var sailRouteFixture = Game.victoryCondition;
+    var sailDistanceFixture = Game.islandDistance;
+    Game.updateObjective();
+    var islandObjectiveFixture =
+      document.getElementById('objective-text').textContent;
+  `);
+  assert.equal(run('sailRouteFixture'), 'island');
+  assert.equal(run('sailDistanceFixture'), 300);
+  assert.match(run('islandObjectiveFixture'), /Isla a 300 m/);
+
+  resetRaft([['0,0', 'radio', 35]]);
+  run(`
+    Game.resetPlayerState({ x: 1, z: 1 });
+    Game.victoryCondition = 'island';
+    Game.islandDistance = 123;
+    Game.rescuedSignal = 55;
+    routeOptionsFixture = null;
+    Game.interact();
+    routeOptionsFixture[0].action();
+    var resumedRadioFixture = Game.victoryCondition;
+    var preservedSignalFixture = Game.rescuedSignal;
+  `);
+  assert.equal(run('resumedRadioFixture'), 'radio');
+  assert.equal(run('preservedSignalFixture'), 55);
+
+  resetRaft([
+    ['0,0', 'sail', 40],
+    ['1,0', 'rudder', 45]
+  ]);
+  run(`
+    Game.resetPlayerState({ x: 1, z: 1 });
+    Game.victoryCondition = 'radio';
+    Game.islandDistance = 123;
+    routeOptionsFixture = null;
+    Game.interact();
+    routeOptionsFixture[0].action();
+    var resumedIslandFixture = Game.victoryCondition;
+    var preservedDistanceFixture = Game.islandDistance;
+  `);
+  assert.equal(run('resumedIslandFixture'), 'island');
+  assert.equal(run('preservedDistanceFixture'), 123);
+
+  resetRaft([
+    ['0,0', 'motor', 50],
+    ['1,0', 'sail', 40],
+    ['0,1', 'rudder', 45]
+  ]);
+  run(`
+    Game.resetPlayerState({ x: 1, z: 1 });
+    Game.victoryCondition = 'radio';
+    Game.resources.plastic = 1;
+    Game.resources.fuel = 0;
+    routeOptionsFixture = null;
+    Game.interact();
+    var storedFuelFixture = Game.resources.fuel;
+    var routeAfterRefuelFixture = Game.victoryCondition;
+    var refuelOpenedRouteFixture = routeOptionsFixture !== null;
+    Game.showDecision = routeDecisionFixture;
+  `);
+  assert.equal(run('storedFuelFixture'), 2);
+  assert.equal(run('routeAfterRefuelFixture'), 'radio');
+  assert.equal(run('refuelOpenedRouteFixture'), false);
+});
+
+test('el mástil amplifica según la salud de la radio', () => {
+  resetRaft([
+    ['0,0', 'radio', 35],
+    ['1,0', 'mast', 60]
+  ]);
+  run(`
+    Game.raft.get(0, 0).health = 0.35;
+    Game.raft.get(0, 0).maxHealth = 35;
+    var mastEventsFixture = Game.pickDailyEvents;
+    var mastSummaryFixture = Game.showDaySummary;
+    Game.pickDailyEvents = () => [];
+    Game.showDaySummary = () => {};
+    CrewManager.members = [];
+    Game.resetPlayerState({
+      x: 1, z: 1, health: 100, hunger: 90, thirst: 90,
+      morale: 80, sanity: 100
+    });
+    Game.resources = {
+      wood: 0, plastic: 0, cloth: 0, metal: 0,
+      rope: 0, food: 1, water: 1.3, fuel: 0
+    };
+    Game.day = 2;
+    Game.zone = 'debris';
+    Game.state = 'playing';
+    Game.victoryCondition = 'radio';
+    Game.rescuedSignal = 1;
+    Game.endDay();
+    var damagedRadioSignalFixture = Game.rescuedSignal;
+    Game.pickDailyEvents = mastEventsFixture;
+    Game.showDaySummary = mastSummaryFixture;
+  `);
+  assert.ok(Math.abs(run('damagedRadioSignalFixture') - 1.12) < 1e-9);
+});
+
+test('volver al menú guarda y un slot futuro no se sobrescribe al continuar', () => {
+  run(`
+    var continueWarningFixture = console.warn;
+    console.warn = () => {};
+    Game.state = 'paused';
+    Game.resources.wood = 37;
+    var menuSaveBeforeFixture = Save.saveCalls;
+    var returnedToMenuFixture = Game.returnToMenu(true);
+    var menuSaveAfterFixture = Save.saveCalls;
+
+    var futureLoadFixture = Save.load;
+    var futureCheckFixture = Save.hasIncompatibleCurrent;
+    Save.load = () => null;
+    Save.hasIncompatibleCurrent = () => true;
+    var futureSaveBeforeFixture = Save.saveCalls;
+    var futureContinueFixture = Game.continueGame();
+    var futureSaveAfterFixture = Save.saveCalls;
+    Save.load = futureLoadFixture;
+    if (futureCheckFixture) Save.hasIncompatibleCurrent = futureCheckFixture;
+    else delete Save.hasIncompatibleCurrent;
+
+    var brokenLoadFixture = Game.loadFromSave;
+    var recoverLoadFixture = Save.load;
+    Save.load = () => ({ day: 8 });
+    Game.loadFromSave = () => { throw new Error('guardado irreparable'); };
+    var brokenSaveBeforeFixture = Save.saveCalls;
+    var brokenContinueFixture = Game.continueGame();
+    var brokenSaveAfterFixture = Save.saveCalls;
+    Game.loadFromSave = brokenLoadFixture;
+    Save.load = recoverLoadFixture;
+    console.warn = continueWarningFixture;
+  `);
+  assert.equal(run('returnedToMenuFixture'), true);
+  assert.equal(run('Game.state'), 'start');
+  assert.equal(
+    run('menuSaveAfterFixture'),
+    run('menuSaveBeforeFixture + 1')
+  );
+  assert.equal(run('futureContinueFixture'), false);
+  assert.equal(run('futureSaveAfterFixture'), run('futureSaveBeforeFixture'));
+  assert.equal(run('brokenContinueFixture'), false);
+  assert.equal(run('brokenSaveAfterFixture'), run('brokenSaveBeforeFixture'));
+  assert.equal(run('Game.state'), 'start');
 });
 
 console.log('Todas las pruebas jugables han pasado.');

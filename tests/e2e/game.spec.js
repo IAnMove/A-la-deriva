@@ -163,6 +163,81 @@ test('mantiene niebla válida y amplía el zoom máximo con la balsa', async ({ 
   expect(errors).toEqual([]);
 });
 
+test('guarda el progreso antes de volver al menú', async ({ page }) => {
+  const errors = await openOffline(page);
+  await page.locator('#btn-new-game').click();
+  await page.evaluate(() => {
+    Game.resources.wood = 37;
+    Game.day = 6;
+  });
+  await page.locator('#btn-pause').click();
+  await expect(page.locator('#pause-screen')).toHaveClass(/active/);
+  await page.locator('#btn-pause-menu').click();
+  await expect(page.locator('#start-screen')).toHaveClass(/active/);
+  await page.locator('#btn-continue').click();
+  const restored = await page.evaluate(() => ({
+    day: Game.day,
+    wood: Game.resources.wood
+  }));
+  expect(restored).toEqual({ day: 6, wood: 37 });
+  expect(errors).toEqual([]);
+});
+
+test('protege un guardado futuro sin sustituirlo por el legacy', async ({ page }) => {
+  const errors = await openOffline(page);
+  const futureRaw = '{"schemaVersion":999,"day":99,"futureOnly":42}';
+  const legacyRaw = '{"day":4,"resources":{"wood":8}}';
+  await page.evaluate(({ futureRaw, legacyRaw }) => {
+    localStorage.clear();
+    localStorage.setItem('aladeriva3d_save_v2', futureRaw);
+    localStorage.setItem('aladeriva3d_save_v1', legacyRaw);
+  }, { futureRaw, legacyRaw });
+  await page.reload();
+  await expect(page.locator('#btn-continue')).toBeDisabled();
+  await expect(page.locator('#btn-continue')).toContainText('versión más reciente');
+  const stored = await page.evaluate(() => ({
+    current: localStorage.getItem('aladeriva3d_save_v2'),
+    legacy: localStorage.getItem('aladeriva3d_save_v1')
+  }));
+  expect(stored).toEqual({ current: futureRaw, legacy: legacyRaw });
+  expect(errors).toEqual([]);
+});
+
+test('recorre balsas cóncavas y permite partir solo con vela y timón', async ({ page }) => {
+  const errors = await openOffline(page);
+  await page.locator('#btn-new-game').click();
+  const arrival = await page.evaluate(() => {
+    for (const cell of Game.raft.grid.values()) Game.raft.disposeMesh(cell);
+    Game.raft.grid.clear();
+    for (const [gx, gy] of [[0, 0], [1, 0], [2, 0], [2, 1], [2, 2]]) {
+      Game.raft.placeAt(gx, gy, 'floor', true);
+    }
+    Game.resetPlayerState({ x: 1, z: 1 });
+    Game.planPlayerPath(2, 2);
+    for (let frame = 0; frame < 180; frame++) Game.updatePlayer(0.05);
+    return Game.raft.worldToGrid(Game.player.x, Game.player.z);
+  });
+  expect(arrival).toEqual({ gx: 2, gy: 2 });
+
+  await page.evaluate(() => {
+    for (const cell of Game.raft.grid.values()) Game.raft.disposeMesh(cell);
+    Game.raft.grid.clear();
+    Game.raft.placeAt(0, 0, 'sail', true);
+    Game.raft.placeAt(1, 0, 'rudder', true);
+    Game.resetPlayerState({ x: 1, z: 1 });
+    Game.resources.fuel = 0;
+    Game.resources.plastic = 0;
+    Game.victoryCondition = null;
+    Game.islandDistance = 2000;
+    Game.interact();
+  });
+  await expect(page.locator('#decision-panel')).toBeVisible();
+  await page.locator('#decision-buttons button').first().click();
+  expect(await page.evaluate(() => Game.victoryCondition)).toBe('island');
+  expect(await page.evaluate(() => Game.islandDistance)).toBe(300);
+  expect(errors).toEqual([]);
+});
+
 test.describe('móvil', () => {
   test.use({
     viewport: { width: 390, height: 844 },

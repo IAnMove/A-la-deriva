@@ -77,6 +77,7 @@ const Input = {
       Input.virtualPulses.clear();
       Input.touchPointer = null;
       Input.mouse.down = false;
+      Input.resetClick();
       document.querySelectorAll('[data-input-hold].is-held').forEach(
         button => button.classList.remove('is-held')
       );

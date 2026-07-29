@@ -201,3 +201,18 @@ renderizado tienen módulos propios con adaptadores compatibles.
 - Guardado v2 con migración, saneado y autoguardado al ocultar o cerrar.
 - Controles táctiles completos y Three.js local para jugar sin conexión.
 - Simulación, HUD y render 3D separados del controlador `Game`.
+
+## Revisión jugable — v1.6
+
+- Movimiento por clic con búsqueda de rutas sobre balsas cóncavas.
+- Movimiento manual relativo al giro de cámara y animación de remo corregida.
+- Vela y radio inician rutas, permiten cambiar entre ellas y conservan el progreso.
+- Impactos de tiburón aplicados al módulo alcanzado en vez de a uno aleatorio.
+- Objetivos de progresión ordenados y con distancia o señal visible.
+- Muerte por hambre o sed resuelta antes de aplicar curación pasiva.
+- Tripulación separada visualmente del jugador cuando comparte una celda.
+- Guardados futuros o demasiado grandes protegidos contra sobrescritura.
+- Carga defensiva de balsas y tripulación; estado transitorio reiniciado al continuar.
+- Salida al menú con guardado síncrono y clics pendientes limpiados al perder foco.
+- Reglas de estado, movimiento, remo, rutas y objetivos extraídas a `GameSimulation`.
+- Nuevas regresiones unitarias y casos E2E preparados para navegador.

@@ -69,17 +69,58 @@ const Save = {
     return clean;
   },
 
-  parse: (raw) => {
-    if (typeof raw !== 'string' || raw.length === 0 || raw.length > Save.MAX_BYTES) return null;
-    try { return Save.migrate(JSON.parse(raw)); }
-    catch (e) {
+  inspect: (raw) => {
+    if (raw === null) return { status: 'absent', data: null };
+    if (typeof raw !== 'string' || raw.length === 0) {
+      return { status: 'corrupt', data: null };
+    }
+    // No se analiza un slot desmesurado, pero tampoco se trata como basura:
+    // puede pertenecer a una versión futura con un límite mayor. Conservarlo
+    // evita que una versión antigua lo sustituya por un fallback legacy.
+    if (raw.length > Save.MAX_BYTES) {
+      return { status: 'oversize', data: null, bytes: raw.length };
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Save.isPlainObject(parsed)) return { status: 'corrupt', data: null };
+      const version = Number(parsed.schemaVersion) || 1;
+      if (version > Save.SCHEMA_VERSION) {
+        console.warn(`El guardado usa una versión futura (${version}).`);
+        return { status: 'future', data: null, version };
+      }
+      const migrated = Save.migrate(parsed);
+      return migrated
+        ? { status: 'valid', data: migrated, version }
+        : { status: 'corrupt', data: null };
+    } catch (e) {
       console.warn('Se ignoró un guardado dañado:', e);
-      return null;
+      return { status: 'corrupt', data: null };
     }
   },
 
+  inspectCurrent: () => {
+    try {
+      return Save.inspect(localStorage.getItem(Save.KEY));
+    } catch (e) {
+      return { status: 'corrupt', data: null };
+    }
+  },
+
+  hasIncompatibleCurrent: () => {
+    const status = Save.inspectCurrent().status;
+    return status === 'future' || status === 'oversize';
+  },
+
+  parse: (raw) => Save.inspect(raw).data,
+
   save: (data) => {
     try {
+      // Un cliente antiguo no debe destruir un guardado creado por una
+      // versión más nueva, ni siquiera mediante el autoguardado.
+      if (Save.hasIncompatibleCurrent()) {
+        console.warn('No se sobrescribió el guardado de una versión futura.');
+        return false;
+      }
       const encoded = JSON.stringify(Save.prepare(data));
       if (encoded.length > Save.MAX_BYTES) throw new Error('El guardado es demasiado grande.');
       localStorage.setItem(Save.KEY, encoded);
@@ -92,9 +133,13 @@ const Save = {
 
   load: () => {
     try {
-      const currentRaw = localStorage.getItem(Save.KEY);
-      const current = Save.parse(currentRaw);
-      if (current) return current;
+      const current = Save.inspectCurrent();
+      if (current.status === 'valid') return current.data;
+      // Un formato futuro es un slot válido pero incompatible. No se intenta
+      // recuperar desde legacy porque eso sobrescribiría datos más recientes.
+      if (current.status === 'future' || current.status === 'oversize') {
+        return null;
+      }
 
       for (const key of Save.LEGACY_KEYS) {
         const migrated = Save.parse(localStorage.getItem(key));
@@ -115,7 +160,10 @@ const Save = {
 
   exists: () => {
     try {
-      if (Save.parse(localStorage.getItem(Save.KEY))) return true;
+      const current = Save.inspectCurrent();
+      if (current.status === 'valid' ||
+          current.status === 'future' ||
+          current.status === 'oversize') return true;
       return Save.LEGACY_KEYS.some(key => !!Save.parse(localStorage.getItem(key)));
     } catch (e) {
       return false;

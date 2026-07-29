@@ -33,7 +33,10 @@ const Game = {
     hookRange: 8,
     hookSpeed: 11,
     moveTarget: null,
+    movePath: [],
+    moveDestination: null,
     rowTarget: null,
+    rowAnim: 0,
   },
 
   // Recursos
@@ -79,7 +82,7 @@ const Game = {
     'Construye redes y recolectores.',
     'Rescata supervivientes con habilidades útiles.',
     'Construye vela y timón para navegar.',
-    'Construye radio o motor para escapar.'
+    'Usa la vela para partir o construye una radio para pedir rescate.'
   ],
   currentObjective: 0,
 
@@ -152,13 +155,25 @@ const Game = {
     Game.savePrefs();
   },
 
+  resetPlayerState: (saved = null) =>
+    GameSimulation.resetPlayerState(Game, saved),
+
+  resetTransientState: () => GameSimulation.resetTransientState(Game),
+
   setState: (s) => {
     Game.state = s;
     document.getElementById('start-screen').classList.toggle('active', s === 'start');
     document.getElementById('end-screen').classList.toggle('active', s === 'end');
     document.getElementById('pause-screen').classList.toggle('active', s === 'paused');
     document.getElementById('ui').classList.toggle('hidden', s !== 'playing');
-    if (s === 'start') document.getElementById('btn-continue').disabled = !Save.exists();
+    if (s === 'start') {
+      const continueButton = document.getElementById('btn-continue');
+      const incompatible = Save.hasIncompatibleCurrent?.() === true;
+      continueButton.disabled = incompatible || !Save.exists();
+      continueButton.textContent = incompatible
+        ? 'Guardado de una versión más reciente'
+        : 'Continuar guardado';
+    }
   },
 
   newGame: () => {
@@ -174,14 +189,7 @@ const Game = {
     Game.heat = false;
     Game.weatherTimers = { storm: 0, rain: 0, fog: 0, heat: 0 };
 
-    Game.player.x = 1; Game.player.z = 1;
-    Game.player.vx = 0; Game.player.vz = 0;
-    Game.player.health = 100; Game.player.hunger = 90; Game.player.thirst = 90; Game.player.morale = 75;
-    Game.player.sanity = 100; Game.player.stamina = 100;
-    Game.player.foodCredit = 0;
-    Game.player.hook = null;
-    Game.player.rowTarget = null;
-    Game.player.moveTarget = null;
+    Game.resetPlayerState();
 
     Game.resources = { wood: 4, plastic: 1, cloth: 0, metal: 0, rope: 1, food: 2, water: 1, fuel: 0 };
 
@@ -202,13 +210,10 @@ const Game = {
     Game.navigationIntel = 0;
     Game.victoryCondition = null;
     Game.currentObjective = 0;
-    Game.rowingBoost = 0;
-    Game.rowingBoostZ = 0;
-    Game.rowingCooldown = 0;
     Game.navigationHeading = 0;
     Game.worldOffset = 0;
     Game.worldOffsetZ = 0;
-    Game.hallucinationTimer = 0;
+    Game.resetTransientState();
     Game.highlightsDirty = true;
 
     PlayerVis.reset();
@@ -223,15 +228,32 @@ const Game = {
 
   continueGame: () => {
     const data = Save.load();
-    if (!data) return Game.newGame();
+    if (!data) {
+      if (Save.hasIncompatibleCurrent?.()) {
+        const button = document.getElementById('btn-continue');
+        if (button) {
+          button.textContent = 'Guardado de una versión más reciente';
+          button.disabled = true;
+        }
+        console.warn('El guardado pertenece a una versión más reciente del juego.');
+        return false;
+      }
+      return Game.newGame();
+    }
     try {
       Game.loadFromSave(data);
     } catch (e) {
-      console.warn('Guardado inválido; se inicia una partida nueva.', e);
-      Game.newGame();
-      return;
+      console.warn('No se pudo cargar el guardado; se conserva sin sobrescribir.', e);
+      Game.setState('start');
+      const button = document.getElementById('btn-continue');
+      if (button) {
+        button.textContent = 'No se pudo recuperar el guardado';
+        button.disabled = true;
+      }
+      return false;
     }
     Game.setState('playing');
+    return true;
   },
 
   loadFromSave: (data) => {
@@ -251,30 +273,7 @@ const Game = {
     Game.rain = Game.storm || Game.weatherTimers.rain > 0;
     Game.fog = Game.weatherTimers.fog > 0;
     Game.heat = Game.weatherTimers.heat > 0;
-    Object.assign(Game.player, {
-      x: 1, z: 1,
-      health: 100, hunger: 90, thirst: 90, morale: 75, stamina: 100, sanity: 100
-    }, data.player || {});
-    Game.player.x = Number.isFinite(Number(Game.player.x)) ? Number(Game.player.x) : 1;
-    Game.player.z = Number.isFinite(Number(Game.player.z)) ? Number(Game.player.z) : 1;
-    Game.player.foodCredit = Util.clamp(
-      Number.isFinite(Number(Game.player.foodCredit))
-        ? Number(Game.player.foodCredit)
-        : 0,
-      0,
-      SURVIVAL_BALANCE.playerFoodNeed
-    );
-    for (const key of ['health', 'hunger', 'thirst', 'morale', 'stamina', 'sanity']) {
-      const fallback = key === 'morale' ? 75 : (key === 'hunger' || key === 'thirst' ? 90 : 100);
-      Game.player[key] = Util.clamp(
-        Number.isFinite(Number(Game.player[key])) ? Number(Game.player[key]) : fallback,
-        0,
-        100
-      );
-    }
-    Game.player.hook = null;
-    Game.player.rowTarget = null;
-    Game.player.moveTarget = null;
+    Game.resetPlayerState(data.player);
     const savedResources = data.resources || {};
     Game.resources = {};
     for (const key of RESOURCE_KEYS) {
@@ -288,7 +287,11 @@ const Game = {
       deathCause: data.stats?.deathCause || ''
     };
     Game.rescuedSignal = Util.clamp(Number(data.rescuedSignal) || 0, 0, 100);
-    Game.islandDistance = Math.max(0, Number(data.islandDistance) || 2000);
+    const savedIslandDistance = Number(data.islandDistance);
+    Game.islandDistance = Math.max(
+      0,
+      Number.isFinite(savedIslandDistance) ? savedIslandDistance : 2000
+    );
     Game.radioIntel = Util.clamp(Number(data.radioIntel) || 0, 0, 40);
     Game.navigationIntel = Util.clamp(Number(data.navigationIntel) || 0, 0, 120);
     Game.victoryCondition = ['radio', 'island'].includes(data.victoryCondition) ? data.victoryCondition : null;
@@ -305,9 +308,14 @@ const Game = {
     for (const cell of Game.raft.grid.values()) Game.raft.disposeMesh(cell);
     Game.raft.grid.clear();
     const entries = Array.isArray(data.raftGrid) ? data.raftGrid : [['0,0', { buildingKey: 'floor', health: 50 }]];
-    for (const [k, v] of entries) {
+    for (const entry of entries) {
+      if (!Array.isArray(entry) || entry.length < 2 ||
+          typeof entry[0] !== 'string') continue;
+      const [k, v] = entry;
       const [gx, gy] = k.split(',').map(Number);
-      if (Number.isFinite(gx) && Number.isFinite(gy) && BUILDINGS[v?.buildingKey] &&
+      if (Number.isInteger(gx) && Number.isInteger(gy) &&
+          Math.abs(gx) <= 1000 && Math.abs(gy) <= 1000 &&
+          BUILDINGS[v?.buildingKey] &&
           Game.raft.placeAt(gx, gy, v.buildingKey, true)) {
         const cell = Game.raft.get(gx, gy);
         cell.maxHealth = Math.max(
@@ -321,8 +329,13 @@ const Game = {
     }
     if (Game.raft.grid.size === 0) Game.raft.placeAt(0, 0, 'floor', true);
     Game.raft.removeDetachedCells();
+    Game.ensurePlayerOnRaft();
     CrewManager.reset();
-    CrewManager.members = (Array.isArray(data.crew) ? data.crew : []).map(Survivor.fromData);
+    CrewManager.members = (Array.isArray(data.crew) ? data.crew : [])
+      .filter(member => member && typeof member === 'object' &&
+        !Array.isArray(member))
+      .slice(0, CrewManager.MAX_MEMBERS || 64)
+      .map(Survivor.fromData);
     EntityManager.reset();
     FloatingText.clear();
     Particles.clear();
@@ -330,6 +343,7 @@ const Game = {
     HookVis.hide();
     BuildManager.close();
     Game.closeAllModals();
+    Game.resetTransientState();
     Game.highlightsDirty = true;
     Log.add('Partida cargada.');
   },
@@ -379,14 +393,39 @@ const Game = {
     }
   },
 
+  requestNewGame: () => {
+    const mustConfirm = Game.state === 'start' && Save.exists() &&
+      typeof window.confirm === 'function';
+    if (mustConfirm &&
+        !window.confirm('Hay una partida guardada. ¿Quieres reemplazarla por una nueva?')) {
+      return false;
+    }
+    if (mustConfirm && Save.hasIncompatibleCurrent?.()) Save.clear();
+    Game.newGame();
+    return true;
+  },
+
+  returnToMenu: (saveCurrent = true) => {
+    const canSave = Game.state === 'playing' || Game.state === 'paused';
+    if (saveCurrent && canSave && !Save.save(Game.getSaveData())) {
+      const button = document.getElementById('btn-pause-menu');
+      if (button) button.textContent = 'No se pudo guardar';
+      return false;
+    }
+    Game.closeAllModals();
+    Game.raft.selected = null;
+    Game.setState('start');
+    return true;
+  },
+
   bindUI: () => {
-    document.getElementById('btn-new-game').onclick = Game.newGame;
+    document.getElementById('btn-new-game').onclick = Game.requestNewGame;
     document.getElementById('btn-continue').onclick = Game.continueGame;
     document.getElementById('btn-restart').onclick = Game.newGame;
-    document.getElementById('btn-menu').onclick = () => Game.setState('start');
+    document.getElementById('btn-menu').onclick = () => Game.returnToMenu(false);
     document.getElementById('btn-resume').onclick = () => Game.setState('playing');
     document.getElementById('btn-save').onclick = Game.saveGame;
-    document.getElementById('btn-pause-menu').onclick = () => Game.setState('start');
+    document.getElementById('btn-pause-menu').onclick = () => Game.returnToMenu(true);
 
     document.getElementById('btn-sound').onclick = Game.toggleSound;
     document.getElementById('btn-pause').onclick = Game.togglePause;
@@ -484,6 +523,7 @@ const Game = {
     if (Game.state !== 'playing' || Game.paused) return;
     const w = Game.mouseWorld;
     if (!w) return;
+    Game.raft.selected = null;
     const { gx, gy } = Game.raft.worldToGrid(w.x, w.z);
 
     // Modo colocación
@@ -521,7 +561,10 @@ const Game = {
 
     // Moverse dentro de la balsa
     if (Game.raft.has(gx, gy)) {
-      Game.player.moveTarget = { gx, gy };
+      Game.player.rowTarget = null;
+      if (!Game.planPlayerPath(gx, gy)) {
+        Game.showFloatingText(w.x, w.z, 'No hay un camino seguro', '#ef5350');
+      }
       return;
     }
 
@@ -555,78 +598,15 @@ const Game = {
     return Game.raft.isConnected(gx, gy);
   },
 
-  startRowingTowards: (wx, wz) => {
-    if (Game.rowingCooldown > 0) return;
-    const cs = Game.raft.cellSize;
-    let best = null, bestD = Infinity;
-    for (const [k] of Game.raft.grid.entries()) {
-      const [gx, gy] = k.split(',').map(Number);
-      const cx = (gx + 0.5) * cs;
-      const cz = (gy + 0.5) * cs;
-      const d = Math.hypot(cx - wx, cz - wz);
-      if (d < bestD) { bestD = d; best = { cx, cz }; }
-    }
-    if (!best) return;
-    const tx = Util.clamp(wx, best.cx - cs / 2 + 0.15, best.cx + cs / 2 - 0.15);
-    const tz = Util.clamp(wz, best.cz - cs / 2 + 0.15, best.cz + cs / 2 - 0.15);
-    const center = Game.raft.getCenter();
-    const vx = center.x - wx;
-    const vz = center.z - wz;
-    const vlen = Math.hypot(vx, vz) || 1;
-    Game.player.rowTarget = {
-      x: tx, z: tz,
-      pushX: vx / vlen,
-      pushZ: vz / vlen
-    };
-    Game.showFloatingText(Game.player.x, Game.player.z, 'Ve al borde a remar', '#4fc3f7');
-  },
+  ensurePlayerOnRaft: () => GameSimulation.ensurePlayerOnRaft(Game),
 
-  row: () => {
-    if (Game.rowingCooldown > 0) return;
-    if (Game.player.stamina < 30) {
-      Game.showFloatingText(Game.player.x, Game.player.z, 'Demasiado cansado', '#ef5350');
-      return;
-    }
-    const p = Game.player;
-    const center = Game.raft.getCenter();
-    const edgeX = center.x - p.x;
-    const edgeZ = center.z - p.z;
-    const edgeLen = Math.hypot(edgeX, edgeZ);
-    const push = p.rowTarget
-      ? { x: p.rowTarget.pushX ?? -1, z: p.rowTarget.pushZ ?? 0 }
-      : (edgeLen > 0.25 ? { x: edgeX / edgeLen, z: edgeZ / edgeLen } : { x: -1, z: 0 });
-    Game.rowingBoost = 3.5 * Math.abs(push.x);
-    Game.rowingBoostZ = 3.5 * push.z;
-    Game.rowingCooldown = 2.0;
-    Game.player.stamina = Math.max(0, Game.player.stamina - 35);
-    Game.player.hunger = Math.max(0, Game.player.hunger - 2);
-    Game.player.thirst = Math.max(0, Game.player.thirst - 3);
-    const rudderEfficiency = Util.clamp(Game.raft.countProvides('rudder'), 0, 1);
-    if (rudderEfficiency > 0 && Math.abs(push.z) > 0.05) {
-      Game.navigationHeading = Util.clamp(
-        Game.navigationHeading + push.z * NAVIGATION_BALANCE.headingStep * rudderEfficiency,
-        -NAVIGATION_BALANCE.maxHeading,
-        NAVIGATION_BALANCE.maxHeading
-      );
-    }
-    if (Game.victoryCondition === 'island' && Game.islandDistance > 0) {
-      const routeControl = 0.5 + rudderEfficiency * 0.5;
-      const rowProgress = NAVIGATION_BALANCE.rowRouteMeters * routeControl * Game.loadSpeedMultiplier();
-      Game.islandDistance = Math.max(0, Game.islandDistance - rowProgress);
-      if (Game.islandDistance <= 0) {
-        Game.triggerWin('island');
-      }
-    }
-    // Salpicaduras
-    for (let i = 0; i < 3; i++) {
-      const backX = p.x - push.x * (1 + Util.rand(0, 1));
-      const backZ = p.z - push.z * (1 + Util.rand(0, 1));
-      Particles.emit(backX, 0.3, backZ, '#dcf5ff', 10, 3 + Util.rand(0, 2));
-    }
-    AudioSys.play('hook');
-    Game.showFloatingText(p.x, p.z, '¡Remando!', '#4fc3f7');
-    Game.player.rowTarget = null;
-  },
+  planPlayerPath: (targetGx, targetGy) =>
+    GameSimulation.planPlayerPath(Game, targetGx, targetGy),
+
+  startRowingTowards: (wx, wz) =>
+    GameSimulation.startRowingTowards(Game, wx, wz),
+
+  row: () => GameSimulation.row(Game),
 
   castHook: (target) => {
     if (Game.player.hook) {
@@ -696,13 +676,27 @@ const Game = {
   },
 
   rescueSurvivor: (survivor, obj) => {
-    CrewManager.add(survivor);
+    if (!CrewManager.add(survivor)) {
+      obj.pendingDecision = false;
+      Game.showFloatingText(
+        obj.x,
+        obj.z,
+        'La tripulación ha alcanzado su límite',
+        '#ef5350'
+      );
+      Log.add(
+        `${survivor.name} no pudo subir: la tripulación ya tiene ` +
+        `${CrewManager.MAX_MEMBERS} integrantes.`
+      );
+      return false;
+    }
     CrewManager.assignPosition(survivor, Game.raft);
     Game.stats.rescued++;
     Log.add(`Has rescatado a ${survivor.name} (${survivor.skill.name}).`);
     Game.removeEntity(obj);
     Game.showFloatingText(obj.x, obj.z, `¡${survivor.name} rescatado!`);
     AudioSys.play('alert');
+    return true;
   },
 
   giveSupplies: (survivor, obj) => {
@@ -1026,108 +1020,7 @@ const Game = {
     }[z] || z;
   },
 
-  updatePlayer: (dt) => {
-    const p = Game.player;
-    const cs = Game.raft.cellSize;
-    const manualMove = Input.isDown('KeyW') || Input.isDown('ArrowUp') ||
-      Input.isDown('KeyS') || Input.isDown('ArrowDown') ||
-      Input.isDown('KeyA') || Input.isDown('ArrowLeft') ||
-      Input.isDown('KeyD') || Input.isDown('ArrowRight');
-    if (manualMove) {
-      p.moveTarget = null;
-      p.rowTarget = null;
-    }
-
-    // Movimiento automático hacia una celda (clic)
-    if (p.moveTarget) {
-      const tx = (p.moveTarget.gx + 0.5) * cs;
-      const tz = (p.moveTarget.gy + 0.5) * cs;
-      const dx = tx - p.x;
-      const dz = tz - p.z;
-      const dist = Math.hypot(dx, dz);
-      if (dist < 0.2) {
-        p.moveTarget = null;
-        p.vx = 0; p.vz = 0;
-      } else {
-        const speed = p.speed * 1.3;
-        p.vx = (dx / dist) * speed;
-        p.vz = (dz / dist) * speed;
-        const prevX = p.x, prevZ = p.z;
-        p.x += p.vx * dt;
-        p.z += p.vz * dt;
-        const g = Game.raft.worldToGrid(p.x, p.z);
-        if (!Game.raft.has(g.gx, g.gy)) {
-          const prev = Game.raft.worldToGrid(prevX, prevZ);
-          if (Game.raft.has(prev.gx, prev.gy)) { p.x = prevX; p.z = prevZ; }
-        }
-      }
-      return;
-    }
-
-    // Movimiento automático hacia el borde para remar
-    if (p.rowTarget) {
-      const dx = p.rowTarget.x - p.x;
-      const dz = p.rowTarget.z - p.z;
-      const dist = Math.hypot(dx, dz);
-      if (dist < 0.2) {
-        Game.row();
-        p.vx = 0; p.vz = 0;
-      } else {
-        const speed = p.speed * 1.4;
-        p.vx = (dx / dist) * speed;
-        p.vz = (dz / dist) * speed;
-        const prevX = p.x, prevZ = p.z;
-        p.x += p.vx * dt;
-        p.z += p.vz * dt;
-        const g = Game.raft.worldToGrid(p.x, p.z);
-        if (!Game.raft.has(g.gx, g.gy)) {
-          const prev = Game.raft.worldToGrid(prevX, prevZ);
-          if (Game.raft.has(prev.gx, prev.gy)) { p.x = prevX; p.z = prevZ; }
-        }
-      }
-      return;
-    }
-
-    let dx = 0, dz = 0;
-    if (Input.isDown('KeyW') || Input.isDown('ArrowUp')) dz -= 1;
-    if (Input.isDown('KeyS') || Input.isDown('ArrowDown')) dz += 1;
-    if (Input.isDown('KeyA') || Input.isDown('ArrowLeft')) dx -= 1;
-    if (Input.isDown('KeyD') || Input.isDown('ArrowRight')) dx += 1;
-    if (dx !== 0 || dz !== 0) {
-      const len = Math.hypot(dx, dz) || 1;
-      dx /= len; dz /= len;
-    }
-
-    p.vx = dx * p.speed;
-    p.vz = dz * p.speed;
-
-    const prevX = p.x, prevZ = p.z;
-    p.x += p.vx * dt;
-    p.z += p.vz * dt;
-
-    // Mantener dentro de la balsa
-    const g = Game.raft.worldToGrid(p.x, p.z);
-    if (!Game.raft.has(g.gx, g.gy)) {
-      const prev = Game.raft.worldToGrid(prevX, prevZ);
-      if (Game.raft.has(prev.gx, prev.gy)) {
-        p.x = prevX; p.z = prevZ;
-      } else {
-        let best = null, bestD = Infinity;
-        for (const [k] of Game.raft.grid.entries()) {
-          const [cx, cy] = k.split(',').map(Number);
-          const cwx = (cx + 0.5) * cs;
-          const cwz = (cy + 0.5) * cs;
-          const d = Math.hypot(cwx - p.x, cwz - p.z);
-          if (d < bestD) { bestD = d; best = { x: cwx, z: cwz }; }
-        }
-        if (best) { p.x = best.x; p.z = best.z; }
-      }
-    }
-
-    const b = Game.raft.getBounds();
-    p.x = Util.clamp(p.x, b.minX * cs + 0.3, (b.maxX + 1) * cs - 0.3);
-    p.z = Util.clamp(p.z, b.minY * cs + 0.3, (b.maxY + 1) * cs - 0.3);
-  },
+  updatePlayer: (dt) => GameSimulation.updatePlayer(Game, dt),
 
   updateHook: (dt) => {
     const p = Game.player;
@@ -1235,7 +1128,7 @@ const Game = {
     // Colisiones de peligros con la balsa
     for (const d of EntityManager.dangers) {
       if (d.active && Game.raft.intersectsCircle(d.x, d.z, d.radius + 0.2)) {
-        const dmg = Game.raft.takeDamage(12);
+        const dmg = Game.raft.takeDamage(12, d.x, d.z);
         Game.reportDetachedModules();
         Game.showEventMessage(`¡Tiburón golpea la balsa! -${Math.floor(dmg)} estructura`);
         AudioSys.play('damage');
@@ -1296,6 +1189,10 @@ const Game = {
   refuelMotor: () => GameSimulation.refuelMotor(Game),
 
   resolveNavigationDay: () => GameSimulation.resolveNavigationDay(Game),
+
+  offerIslandRoute: () => GameSimulation.offerIslandRoute(Game),
+
+  offerRadioRoute: () => GameSimulation.offerRadioRoute(Game),
 
   interact: () => {
     const p = Game.player;
@@ -1379,20 +1276,9 @@ const Game = {
         Game.showFloatingText(p.x, p.z, Game.player.health >= 100 ? 'Ya estás sano' : 'Necesitas 1 tela', '#ef5350');
       }
     } else if (b.key === 'radio') {
-      if (Game.rescuedSignal === 0) {
-        Game.showDecision('Señal de socorro', '¿Deseas empezar a emitir una señal continua con la radio? Requiere mantenerla operativa.', [
-          { label: 'Sí', action: () => {
-            Game.victoryCondition = 'radio';
-            Game.rescuedSignal = Math.max(1, 1 + Game.radioIntel);
-            Log.add(Game.radioIntel > 0
-              ? `La radio usa la información de la tripulación y comienza con ${Game.rescuedSignal.toFixed(0)}% de señal.`
-              : 'La radio comienza a emitir señal de socorro.');
-          } },
-          { label: 'No', action: () => { } }
-        ]);
-      } else {
-        Game.showFloatingText(p.x, p.z, `Señal automática ${Game.rescuedSignal.toFixed(0)}%`);
-      }
+      Game.offerRadioRoute();
+    } else if (b.key === 'sail') {
+      Game.offerIslandRoute();
     } else if (b.key === 'rudder') {
       const headings = [-1, 0, 1];
       const currentIndex = headings.reduce((best, value, index) =>
@@ -1404,6 +1290,9 @@ const Game = {
       Game.showFloatingText(p.x, p.z, `Rumbo: ${label}`, '#4fc3f7');
       Log.add(`El timón fija el rumbo hacia ${label}.`);
     } else if (b.key === 'motor') {
+      const canNavigate =
+        Game.raft.countProvides('sail') > 0 &&
+        Game.raft.countProvides('rudder') > 0;
       if ((Game.resources.fuel || 0) < NAVIGATION_BALANCE.motorFuelPerDay) {
         if (Game.refuelMotor()) {
           Game.showFloatingText(
@@ -1413,26 +1302,23 @@ const Game = {
             '#ffca28'
           );
           Log.add('Conviertes una pieza de plástico en combustible para el motor.');
+          return;
+        }
+        if (Game.victoryCondition !== 'island' && canNavigate) {
+          Game.offerIslandRoute();
         } else {
           Game.showFloatingText(p.x, p.z, 'Necesitas 1 plástico para fabricar combustible', '#ef5350');
         }
         return;
       }
+      if (Game.victoryCondition !== 'island' && canNavigate) {
+        Game.offerIslandRoute();
+        return;
+      }
       if (Game.victoryCondition === 'island') {
         Game.showFloatingText(p.x, p.z, `Combustible: ${Game.resources.fuel.toFixed(1)}`, '#ffca28');
-      } else if (Game.raft.countProvides('sail') && Game.raft.countProvides('rudder')) {
-        Game.showDecision('Navegar hacia la isla', 'Vela y timón listos. El motor gastará 0,5 de combustible al día. ¿Partir?', [
-          { label: 'Sí', action: () => {
-            Game.victoryCondition = 'island';
-            Game.islandDistance = Math.max(150, 300 - Game.navigationIntel);
-            Log.add(Game.navigationIntel > 0
-              ? `Las historias de la tripulación acortan la ruta inicial a ${Game.islandDistance.toFixed(0)} m.`
-              : 'Has decidido navegar hacia una isla.');
-          } },
-          { label: 'No', action: () => { } }
-        ]);
       } else {
-        Game.showFloatingText(p.x, p.z, 'Necesitas vela y timón');
+        Game.showFloatingText(p.x, p.z, 'Necesitas vela y timón operativos');
       }
     }
   },
@@ -1454,6 +1340,11 @@ const Game = {
     const supplyReport = Game.resolveDailySupplies();
     const foodConsumed = supplyReport.foodConsumed;
     const waterConsumed = supplyReport.waterConsumed;
+    if (Game.player.health <= 0) {
+      Game.stats.deathCause = 'El personaje principal ha muerto';
+      Game.triggerLose();
+      return;
+    }
 
     const heal = Game.raft.countProvides('heal');
     if (heal > 0) Game.player.health = Math.min(100, Game.player.health + heal);
@@ -1480,10 +1371,12 @@ const Game = {
     Game.clampPlayerStats();
     Game.checkWinLose();
     if (Game.state !== 'playing') return;
+    if (Game.checkRouteVictory()) return;
 
     const radioEfficiency = Util.clamp(Game.raft.countProvides('radio'), 0, 1);
     if (Game.victoryCondition === 'radio' && radioEfficiency > 0) {
-      Game.rescuedSignal += 8 * radioEfficiency + Game.raft.countProvides('mast') * 4;
+      const mastBonus = Game.raft.countProvides('mast') * 4;
+      Game.rescuedSignal += (8 + mastBonus) * radioEfficiency;
       if (Game.rescuedSignal >= 100) {
         Game.triggerWin('radio');
         return;
@@ -1606,18 +1499,7 @@ const Game = {
     if (Game.storm && Math.random() < 1 - Math.exp(-dt / 18)) AudioSys.play('storm');
   },
 
-  updateObjective: () => {
-    const area = Game.raft.totalArea();
-    const crew = CrewManager.count();
-    let idx = 0;
-    if (Game.resources.food >= 3 && Game.resources.water >= 3) idx = 1;
-    if (area >= 4) idx = 2;
-    if (Game.raft.totalAutoFood() > 0 || Game.raft.countProvides('rainWater') > 0) idx = 3;
-    if (crew >= 1) idx = 4;
-    if (Game.raft.countProvides('sail') && Game.raft.countProvides('rudder')) idx = 5;
-    Game.currentObjective = idx;
-    GameUI.setObjective(Game.objectives[idx]);
-  },
+  updateObjective: () => GameSimulation.updateObjective(Game),
 
   showDaySummary: (food, water, events, crewNotes = []) => {
     Game.paused = true;
@@ -1631,6 +1513,8 @@ const Game = {
       heat: 'calor extremo', wave: 'ola gigante', bird: 'ave cercana', ship: 'barco avistado'
     }[ev] || ev;
   },
+
+  checkRouteVictory: () => GameSimulation.checkRouteVictory(Game),
 
   checkWinLose: () => {
     if (Game.player.health <= 0) {
@@ -1692,6 +1576,10 @@ const Game = {
 
   // ---- Highlights 3D (colocación, remo, selección) ----
   updateHighlights: () => {
+    if (Game.raft.selected &&
+        !Game.raft.has(Game.raft.selected.gx, Game.raft.selected.gy)) {
+      Game.raft.selected = null;
+    }
     GameRenderer.updateHighlights(Game);
   },
 

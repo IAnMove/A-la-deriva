@@ -6,6 +6,8 @@
  * actuales a esta primera fase de la separación.
  *****************************************************/
 
+let eventMessageTimeout = null;
+
 const GameUI = Object.freeze({
   setSoundButton(enabled) {
     const button = document.getElementById('btn-sound');
@@ -60,7 +62,13 @@ const GameUI = Object.freeze({
     const element = document.getElementById('event-message');
     element.textContent = text;
     element.classList.add('show');
-    setTimeout(() => element.classList.remove('show'), 2500);
+    if (eventMessageTimeout !== null) {
+      clearTimeout(eventMessageTimeout);
+    }
+    eventMessageTimeout = setTimeout(() => {
+      element.classList.remove('show');
+      eventMessageTimeout = null;
+    }, 2500);
   },
 
   showDaySummary(game, food, water, events, crewNotes = []) {
