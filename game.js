@@ -60,6 +60,7 @@ const Game = {
   worldOffset: 0,
   worldOffsetZ: 0,
   hallucinationTimer: 0,
+  fishing: { active: false },
 
   // Meshes auxiliares
   ghostMesh: null,
@@ -153,6 +154,7 @@ const Game = {
   },
 
   newGame: () => {
+    if (Game.fishing?.active) Game.cancelFishing(false);
     Game.paused = false;
     Game.day = 1;
     Game.time = 6;
@@ -223,6 +225,7 @@ const Game = {
   },
 
   loadFromSave: (data) => {
+    if (Game.fishing?.active) Game.cancelFishing(false);
     Game.paused = false;
     Game.day = Number.isFinite(data.day) ? Math.max(1, Math.floor(data.day)) : 1;
     Game.time = Number.isFinite(data.time) ? Util.clamp(data.time, 0, 23.99) : 6;
@@ -398,6 +401,8 @@ const Game = {
       document.getElementById('day-summary').classList.add('hidden');
       Game.paused = false;
     };
+    const fishingButton = document.getElementById('btn-fishing-pull');
+    if (fishingButton) fishingButton.onclick = Game.requestFishingPull;
 
     document.querySelectorAll('#build-tabs .tab').forEach(tab => {
       tab.onclick = () => {
@@ -414,6 +419,9 @@ const Game = {
     document.getElementById('log-panel').classList.add('hidden');
     document.getElementById('decision-panel').classList.add('hidden');
     document.getElementById('day-summary').classList.add('hidden');
+    const fishingPanel = document.getElementById('fishing-panel');
+    if (fishingPanel) fishingPanel.classList.add('hidden');
+    if (Game.fishing?.active) Game.cancelFishing(false);
     BuildManager.close();
     Game.paused = false;
   },
@@ -693,6 +701,232 @@ const Game = {
     }
   },
 
+  // ---- Minijuego de pesca ----
+  startFishing: (bank, hook) => {
+    if (Game.fishing?.active || !bank || !hook || bank.fishing ||
+        bank.active === false || bank.fishCount <= 0) return false;
+
+    const marker = Util.rand(0.08, 0.2);
+    Game.fishing = {
+      active: true,
+      bank,
+      hook,
+      marker,
+      direction: 1,
+      speed: 0.62,
+      targetCenter: 0.65,
+      targetWidth: 0.24,
+      timeLeft: 7,
+      duration: 7,
+      hits: 0,
+      misses: 0,
+      precision: 0,
+      pullRequested: false,
+      cooldown: 0,
+      feedback: '',
+      feedbackTimer: 0,
+      instruction: 'Espera a que el pez entre en la zona y tira.'
+    };
+    Game.pickFishingTarget();
+    bank.fishing = true;
+    hook.fishing = true;
+    hook.returning = false;
+    Game.paused = true;
+
+    const panel = document.getElementById('fishing-panel');
+    if (panel) {
+      panel.classList.remove('hidden', 'success', 'failure');
+    }
+    const track = document.getElementById('fishing-track');
+    if (track) track.classList.remove('success', 'failure');
+    const button = document.getElementById('btn-fishing-pull');
+    if (button?.focus) button.focus({ preventScroll: true });
+    AudioSys.play('fish-bite');
+    Game.updateFishingUI();
+    return true;
+  },
+
+  pickFishingTarget: () => {
+    const fishing = Game.fishing;
+    if (!fishing?.active) return;
+    const min = 0.18 + fishing.targetWidth * 0.5;
+    const max = 0.82 - fishing.targetWidth * 0.5;
+    let center = Util.rand(min, max);
+    if (Math.abs(center - fishing.marker) < 0.2) {
+      center = fishing.marker < 0.5 ? max : min;
+    }
+    fishing.targetCenter = Util.clamp(center, min, max);
+  },
+
+  requestFishingPull: () => {
+    if (Game.fishing?.active) Game.fishing.pullRequested = true;
+  },
+
+  updateFishing: (dt) => {
+    const fishing = Game.fishing;
+    if (!fishing?.active) return;
+    const safeDt = Math.max(0, Math.min(dt || 0, 0.1));
+
+    if (Input.wasPressed('Escape')) {
+      Game.cancelFishing(true);
+      return;
+    }
+    if (Input.wasPressed('Space')) fishing.pullRequested = true;
+
+    fishing.timeLeft = Math.max(0, fishing.timeLeft - safeDt);
+    fishing.cooldown = Math.max(0, fishing.cooldown - safeDt);
+    fishing.feedbackTimer = Math.max(0, fishing.feedbackTimer - safeDt);
+    if (fishing.feedbackTimer <= 0) fishing.feedback = '';
+
+    fishing.marker += fishing.direction * fishing.speed * safeDt;
+    if (fishing.marker >= 0.96) {
+      fishing.marker = 0.96;
+      fishing.direction = -1;
+    } else if (fishing.marker <= 0.04) {
+      fishing.marker = 0.04;
+      fishing.direction = 1;
+    }
+
+    if (fishing.pullRequested && fishing.cooldown <= 0) {
+      fishing.pullRequested = false;
+      fishing.cooldown = 0.32;
+      const halfWidth = fishing.targetWidth * 0.5;
+      const distance = Math.abs(fishing.marker - fishing.targetCenter);
+      const hit = distance <= halfWidth;
+
+      if (hit) {
+        const precision = 1 - distance / Math.max(0.001, halfWidth);
+        fishing.hits++;
+        fishing.precision += precision;
+        fishing.feedback = 'hit';
+        fishing.instruction = fishing.hits >= 2
+          ? '¡Pez asegurado!'
+          : '¡Buen tirón! Prepárate para el siguiente.';
+        AudioSys.play('fish-tug');
+      } else {
+        fishing.misses++;
+        fishing.feedback = 'miss';
+        fishing.instruction = fishing.misses >= 2
+          ? 'El sedal perdió tensión.'
+          : 'Demasiado pronto o demasiado tarde. Inténtalo otra vez.';
+        AudioSys.play('fish-miss');
+      }
+      fishing.feedbackTimer = 0.38;
+
+      if (fishing.hits >= 2) {
+        Game.finishFishing(true, '¡Pez capturado!');
+        return;
+      }
+      if (fishing.misses >= 2) {
+        Game.finishFishing(false, 'El pez escapó tras dos tirones fallidos.');
+        return;
+      }
+
+      fishing.targetWidth = Math.max(0.15, fishing.targetWidth - 0.035);
+      fishing.speed = Math.min(0.95, fishing.speed + 0.08);
+      Game.pickFishingTarget();
+    }
+
+    if (fishing.timeLeft <= 0) {
+      Game.finishFishing(false, 'Se agotó el tiempo y el pez escapó.');
+      return;
+    }
+    Game.updateFishingUI();
+  },
+
+  finishFishing: (success, message, announce = true) => {
+    const fishing = Game.fishing;
+    if (!fishing?.active) return false;
+    const { bank, hook } = fishing;
+    if (bank) bank.fishing = false;
+    if (hook) {
+      hook.fishing = false;
+      hook.returning = true;
+    }
+
+    if (success) {
+      const baseAmount = fishing.precision >= 1.35 ? 3 : 2;
+      const amount = Math.round(baseAmount * (1 + CrewManager.getFishingBonus()) * 100) / 100;
+      Game.resources.food += amount;
+      let caughtFish = null;
+      if (bank?.takeFishVisual) {
+        const fishBefore = bank.fishCount;
+        caughtFish = bank.takeFishVisual();
+        // Conserva la lógica aunque un banco cargado de una versión anterior
+        // no tenga sus peces visuales sincronizados.
+        if (!caughtFish && bank.fishCount === fishBefore) {
+          bank.fishCount = Math.max(0, bank.fishCount - 1);
+          if (bank.fishCount <= 0) bank.active = false;
+        }
+      } else if (bank) {
+        bank.fishCount = Math.max(0, bank.fishCount - 1);
+        if (bank.fishCount <= 0) bank.active = false;
+      }
+      if (caughtFish && HookVis.attachCatch) HookVis.attachCatch(caughtFish);
+      Game.showFloatingText(hook.x, hook.z, `+${Util.formatAmount(amount, 2)} comida`);
+      AudioSys.play('fish-success');
+      message = `${message} +${Util.formatAmount(amount, 2)} comida.`;
+    } else {
+      AudioSys.play('fish-fail');
+    }
+
+    const panel = document.getElementById('fishing-panel');
+    if (panel) {
+      panel.classList.add('hidden');
+      panel.classList.remove('success', 'failure');
+    }
+    const track = document.getElementById('fishing-track');
+    if (track) track.classList.remove('success', 'failure');
+    Game.fishing = { active: false };
+    Game.paused = false;
+    if (announce && message) Game.showEventMessage(message);
+    return success;
+  },
+
+  cancelFishing: (announce = true) => {
+    if (!Game.fishing?.active) {
+      const panel = document.getElementById('fishing-panel');
+      if (panel) panel.classList.add('hidden');
+      const track = document.getElementById('fishing-track');
+      if (track) track.classList.remove('success', 'failure');
+      return false;
+    }
+    return Game.finishFishing(false, 'Pesca cancelada.', announce);
+  },
+
+  updateFishingUI: () => {
+    const fishing = Game.fishing;
+    if (!fishing?.active) return;
+    const marker = document.getElementById('fishing-marker');
+    const target = document.getElementById('fishing-target');
+    const timer = document.getElementById('fishing-timer');
+    const progress = document.getElementById('fishing-progress');
+    const instruction = document.getElementById('fishing-instruction');
+    const button = document.getElementById('btn-fishing-pull');
+    const panel = document.getElementById('fishing-panel');
+
+    if (marker) marker.style.left = `${(fishing.marker * 100).toFixed(2)}%`;
+    if (target) {
+      target.style.left = `${((fishing.targetCenter - fishing.targetWidth * 0.5) * 100).toFixed(2)}%`;
+      target.style.width = `${(fishing.targetWidth * 100).toFixed(2)}%`;
+    }
+    if (timer) timer.textContent = `Tiempo: ${fishing.timeLeft.toFixed(1)} s`;
+    if (progress) {
+      progress.textContent = `Tirones ${fishing.hits}/2 · Fallos ${fishing.misses}/2`;
+    }
+    if (instruction) instruction.textContent = fishing.instruction;
+    if (button) button.disabled = fishing.cooldown > 0;
+    if (panel) {
+      panel.classList.toggle('success', fishing.feedback === 'hit');
+      panel.classList.toggle('failure', fishing.feedback === 'miss');
+    }
+    const track = document.getElementById('fishing-track');
+    if (track) {
+      track.classList.toggle('success', fishing.feedback === 'hit');
+      track.classList.toggle('failure', fishing.feedback === 'miss');
+    }
+  },
+
   showDecision: (title, text, options) => {
     Game.paused = true;
     const panel = document.getElementById('decision-panel');
@@ -736,6 +970,11 @@ const Game = {
 
   // ---- Actualización principal ----
   update: (dt) => {
+    if (Game.fishing?.active) {
+      Game.updateFishing(dt);
+      Input.resetClick();
+      return;
+    }
     if (Game.menuModalOpen() && Input.wasPressed('Escape')) {
       Game.closeAllModals();
       Game.raft.selected = null;
@@ -1028,19 +1267,10 @@ const Game = {
     if (!h.object) {
       for (const bank of EntityManager.fishBanks) {
         if (Util.dist2(h.x, h.z, bank.x, bank.z) < bank.radius) {
-          const amount = Math.round(Util.randInt(1, 3) * (1 + CrewManager.getFishingBonus()) * 100) / 100;
-          Game.resources.food += amount;
-          Game.showFloatingText(h.x, h.z, `+${amount} comida`);
-          AudioSys.play('collect');
-          if (bank.takeFishVisual) {
-            const caughtFish = bank.takeFishVisual();
-            if (caughtFish && HookVis.attachCatch) HookVis.attachCatch(caughtFish);
-          } else {
-            bank.fishCount--;
-            if (bank.fishCount <= 0) bank.active = false;
+          if (Game.startFishing(bank, h)) {
+            HookVis.show(p.x, p.z, h.x, h.z);
+            return;
           }
-          h.returning = true;
-          break;
         }
       }
     }
@@ -1710,6 +1940,14 @@ const Game = {
     // Jugador y tripulación
     PlayerVis.sync(Game.player, dt, time);
     PlayerVis.updateAim(Game.player, BuildManager.placing ? null : Game.mouseWorld);
+    if (Game.fishing?.active && Game.player.hook) {
+      HookVis.show(
+        Game.player.x,
+        Game.player.z,
+        Game.player.hook.x,
+        Game.player.hook.z
+      );
+    }
     CrewManager.syncMeshes(Game.raft);
 
     // Mundo

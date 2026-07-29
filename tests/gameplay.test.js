@@ -337,6 +337,66 @@ test('historias de náufragos aportan valor y riesgo persistente', () => {
   assert.equal(run('workNotesFixture.length'), 1);
 });
 
+test('minijuego de pesca pausa el mundo y resuelve captura o escape', () => {
+  run(`
+    CrewManager.members = [];
+    Game.state = 'playing';
+    Game.paused = false;
+    Game.time = 10;
+    Game.resources.food = 0;
+    Input.keys = {};
+    Input.held = {};
+
+    var fishingBankFixture = {
+      x: 4, z: 4, radius: 2, active: true, fishCount: 3, fishing: false,
+      takeCalls: 0,
+      takeFishVisual() {
+        this.fishCount--;
+        this.takeCalls++;
+        return {};
+      }
+    };
+    var fishingHookFixture = {
+      x: 4, z: 4, returning: false, fishing: false
+    };
+    var fishingStartedFixture = Game.startFishing(fishingBankFixture, fishingHookFixture);
+    var fishingTimeFixture = Game.time;
+    Game.update(0.1);
+    var fishingWorldPausedFixture = Game.time === fishingTimeFixture;
+
+    Game.fishing.marker = Game.fishing.targetCenter;
+    Game.requestFishingPull();
+    Game.updateFishing(0);
+    Game.fishing.cooldown = 0;
+    Game.fishing.marker = Game.fishing.targetCenter;
+    Game.requestFishingPull();
+    Game.updateFishing(0);
+
+    var foodAfterCatchFixture = Game.resources.food;
+    var escapedBankFixture = {
+      x: 5, z: 5, radius: 2, active: true, fishCount: 2, fishing: false
+    };
+    var escapedHookFixture = {
+      x: 5, z: 5, returning: false, fishing: false
+    };
+    var escapeStartedFixture = Game.startFishing(escapedBankFixture, escapedHookFixture);
+    Game.fishing.timeLeft = 0.01;
+    Game.updateFishing(0.02);
+  `);
+
+  assert.equal(run('fishingStartedFixture'), true);
+  assert.equal(run('fishingWorldPausedFixture'), true);
+  assert.equal(run('fishingBankFixture.takeCalls'), 1);
+  assert.equal(run('fishingBankFixture.fishCount'), 2);
+  assert.equal(run('fishingHookFixture.returning'), true);
+  assert.equal(run('foodAfterCatchFixture'), 3);
+  assert.equal(run('Game.paused'), false);
+  assert.equal(run('escapeStartedFixture'), true);
+  assert.equal(run('escapedBankFixture.fishCount'), 2);
+  assert.equal(run('escapedHookFixture.returning'), true);
+  assert.equal(run('Game.fishing.active'), false);
+});
+
 test('supervivencia diaria, recuperación y autoguardado', () => {
   resetRaft([['0,0', 'net', 35], ['1,0', 'purifier', 40]]);
   run(`

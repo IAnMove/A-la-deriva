@@ -327,6 +327,142 @@ button.danger { background: linear-gradient(180deg, #ff7043, #d84315); color: #f
 .summary-line ul { margin: 6px 0 0; padding-left: 20px; }
 #decision-text { white-space: pre-line; line-height: 1.45; }
 
+/* Minijuego de pesca */
+.fishing-content {
+  max-width: 560px;
+  text-align: center;
+  border-color: rgba(79, 195, 247, 0.55);
+}
+
+#fishing-title {
+  margin: 0 0 8px;
+  color: var(--accent);
+  font-size: 1.45rem;
+}
+
+#fishing-instruction {
+  margin: 0 auto 18px;
+  max-width: 440px;
+  color: var(--text);
+  line-height: 1.45;
+}
+
+.fishing-status {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 10px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+#fishing-timer::before { content: "⏱ "; }
+#fishing-progress::before { content: "🎣 "; }
+
+#fishing-track {
+  position: relative;
+  height: 76px;
+  margin: 8px 0 18px;
+  overflow: hidden;
+  border: 2px solid rgba(227, 242, 253, 0.55);
+  border-radius: 12px;
+  background:
+    repeating-linear-gradient(90deg, transparent 0 9%, rgba(255,255,255,0.05) 9% 10%),
+    linear-gradient(180deg, rgba(79, 195, 247, 0.2), rgba(2, 136, 209, 0.08));
+  box-shadow: inset 0 4px 14px rgba(0, 0, 0, 0.3);
+}
+
+#fishing-track::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  border-top: 2px solid rgba(227, 242, 253, 0.35);
+}
+
+#fishing-target {
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  left: 42%;
+  width: 18%;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  border: 3px dashed var(--success);
+  border-radius: 9px;
+  background: rgba(102, 187, 106, 0.22);
+}
+
+#fishing-target span {
+  padding: 1px 5px 2px;
+  border-radius: 0 0 5px 5px;
+  background: rgba(6, 30, 18, 0.82);
+  color: #dff9e2;
+  font-size: 0.67rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  line-height: 1.35;
+  text-transform: uppercase;
+}
+
+#fishing-marker {
+  position: absolute;
+  top: 50%;
+  left: 8%;
+  z-index: 2;
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  transform: translate(-50%, -50%);
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #015879;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.5);
+  font-size: 1.55rem;
+  line-height: 1;
+  will-change: left;
+}
+
+#btn-fishing-pull {
+  display: block;
+  width: min(100%, 340px);
+  min-height: 52px;
+  margin: 0 auto;
+  font-size: 1.05rem;
+}
+
+#fishing-panel.success .fishing-content,
+#fishing-track.success {
+  border-color: var(--success);
+  box-shadow: 0 0 22px rgba(102, 187, 106, 0.42);
+}
+
+#fishing-panel.failure .fishing-content,
+#fishing-track.failure {
+  border-color: var(--danger);
+  box-shadow: 0 0 22px rgba(239, 83, 80, 0.42);
+}
+
+#fishing-track.success::before,
+#fishing-track.failure::before {
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
+  z-index: 3;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.72);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+#fishing-track.success::before { content: "¡Buen tirón! ✓"; }
+#fishing-track.failure::before { content: "Fuera de zona ✕"; }
+
 /* Responsive */
 @media (max-width: 720px) {
   #player-hud { width: 160px; top: 110px; }
@@ -334,4 +470,17 @@ button.danger { background: linear-gradient(180deg, #ff7043, #d84315); color: #f
   #objective-panel { top: 220px; max-width: 180px; }
   .bar span { width: 44px; font-size: 0.7rem; }
   #top-bar { font-size: 0.85rem; }
+
+  .fishing-content { width: 94%; padding: 18px 14px; }
+  #fishing-title { font-size: 1.25rem; }
+  #fishing-instruction { font-size: 0.9rem; }
+  .fishing-status { gap: 8px; font-size: 0.88rem; }
+  #fishing-track { height: 68px; }
+  #fishing-marker { width: 38px; height: 38px; font-size: 1.35rem; }
+  #btn-fishing-pull { min-height: 56px; }
+}
+
+@media (max-width: 380px) {
+  .fishing-status { flex-direction: column; gap: 4px; }
+  #fishing-track { margin-top: 12px; }
 }

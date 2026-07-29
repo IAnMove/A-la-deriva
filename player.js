@@ -128,6 +128,13 @@ const PlayerVis = {
         parts.armR.rotation.x = 0.75 - eased * 2.45;
         parts.armL.rotation.x = 0.25 - eased * 0.45;
         m.rotation.z = -0.08 + eased * 0.13;
+      } else if (p.hook.fishing) {
+        // Mantiene tensión mientras el mundo está pausado por el minijuego.
+        const struggle = Math.sin(time * 11);
+        parts.armR.rotation.x = -1.05 + struggle * 0.22;
+        parts.armL.rotation.x = -0.75 - struggle * 0.16;
+        m.rotation.x = 0.08 + Math.max(0, struggle) * 0.05;
+        m.rotation.z = struggle * 0.035;
       } else if (p.hook.returning) {
         // Pequeños tirones al recoger el sedal.
         parts.armR.rotation.x = -1.15 + Math.sin(time * 10) * 0.13;

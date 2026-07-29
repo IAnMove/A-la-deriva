@@ -56,6 +56,11 @@ const AudioSys = (() => {
         case 'build': beep(330, 0.3, 'square', 0.06); break;
         case 'damage': beep(160, 0.35, 'sawtooth', 0.12); break;
         case 'storm': noise(0.8, 0.15); break;
+        case 'fish-bite': beep(720, 0.16, 'triangle', 0.09); break;
+        case 'fish-tug': beep(920, 0.1, 'sine', 0.08); break;
+        case 'fish-miss': beep(260, 0.14, 'triangle', 0.07); break;
+        case 'fish-success': beep(1046, 0.28, 'sine', 0.1); break;
+        case 'fish-fail': beep(180, 0.35, 'sawtooth', 0.07); break;
         case 'alert': beep(600, 0.15, 'square', 0.1); beep(600, 0.15, 'square', 0.1); break;
         case 'day': beep(523, 0.3, 'sine', 0.08); beep(659, 0.4, 'sine', 0.08); break;
         case 'win': beep(523, 0.2, 'sine', 0.1); beep(659, 0.2, 'sine', 0.1); beep(784, 0.4, 'sine', 0.1); break;

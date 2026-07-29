@@ -23,6 +23,7 @@
           <li><strong>Clic derecho</strong>: seleccionar celda (E para desmontarla)</li>
           <li><strong>Shift</strong>: remar con las manos desde donde estás</li>
           <li><strong>E</strong>: interactuar / desmontar celda seleccionada</li>
+          <li><strong>Pesca</strong>: al enganchar un pez se abre el minijuego; pulsa Espacio o haz clic para tirar</li>
           <li><strong>B</strong>: abrir menú de construcción</li>
           <li><strong>Escape</strong>: cancelar colocación / cerrar menús</li>
           <li><strong>Espacio</strong>: pausar</li>
@@ -33,7 +34,7 @@
         <button id="btn-new-game">Nueva partida</button>
         <button id="btn-continue">Continuar</button>
       </div>
-      <p class="version">v1.3 · Cámara, historias y pesca visible</p>
+      <p class="version">v1.4 · Cámara, historias y minijuego de pesca</p>
     </div>
   </div>
 
@@ -132,6 +133,23 @@
         <h3 id="decision-title"></h3>
         <p id="decision-text"></p>
         <div id="decision-buttons"></div>
+      </div>
+    </div>
+
+    <!-- Minijuego de pesca -->
+    <div id="fishing-panel" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="fishing-title" aria-describedby="fishing-instruction">
+      <div class="modal-content fishing-content">
+        <h3 id="fishing-title">¡Pez enganchado!</h3>
+        <p id="fishing-instruction">Tira cuando el pez esté dentro de la zona marcada. Consigue 2 tirones antes de que se agote el tiempo.</p>
+        <div class="fishing-status" aria-live="polite">
+          <span id="fishing-timer">Tiempo: 7.0 s</span>
+          <span id="fishing-progress">Tirones 0/2 · Fallos 0/2</span>
+        </div>
+        <div id="fishing-track" role="img" aria-label="Pista de pesca: haz coincidir el pez con la zona objetivo">
+          <div id="fishing-target" aria-hidden="true"><span>Zona</span></div>
+          <div id="fishing-marker" aria-hidden="true"><span>🐟</span></div>
+        </div>
+        <button id="btn-fishing-pull" type="button">Tirar ahora (Espacio)</button>
       </div>
     </div>
 
