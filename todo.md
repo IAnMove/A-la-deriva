@@ -11,8 +11,8 @@ Crear una versión 3D jugable de **A la Deriva** usando **Three.js** (por CDN), 
 - HTML5
 - CSS
 - JavaScript vanilla
-- **Three.js** cargado desde CDN (por ejemplo, `https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js`)
-- Sin backend, sin build, sin dependencias externas salvo Three.js
+- **Three.js 0.149.0** incluido en `vendor/`, con CDN fijada y SRI como respaldo.
+- Sin backend ni build obligatorio; Playwright es opcional para las pruebas E2E.
 
 ## Estructura de archivos
 
@@ -21,7 +21,10 @@ a-la-deriva-3d/
 ├── index.html
 ├── style.css
 ├── main.js              # Punto de entrada: comprueba THREE y arranca el Game
-├── game.js              # Lógica principal, estados, día/noche, eventos, UI, bucle
+├── game.js              # Estado y controlador compatible
+├── game-simulation.js   # Reglas agregadas y orquestación de la simulación
+├── game-ui.js           # Presentación DOM y HUD
+├── game-renderer.js     # Presentación 3D, cámara y resaltados
 ├── world.js             # Escena, mar con espuma, cielo, iluminación, clima, cámara
 ├── raft.js              # Balsa 3D, construcción sobre cuadrícula, modelos de estructuras
 ├── player.js            # Figura 3D del náufrago y animaciones (la lógica está en game.js)
@@ -33,13 +36,14 @@ a-la-deriva-3d/
 └── save.js              # localStorage
 ```
 
-Nota: la UI se gestiona desde `game.js` (como en la versión 2D), por lo que no existe `ui.js`.
+`game.js` conserva el estado y actúa como controlador. Simulación, UI y
+renderizado tienen módulos propios con adaptadores compatibles.
 
 ## Fases de implementación
 
 ### Fase 1 — Esqueleto 3D
 
-1. `index.html` con canvas a pantalla completa, UI básica y Three.js desde CDN.
+1. `index.html` con canvas, UI y Three.js local con respaldo CDN.
 2. `main.js`:
    - Crear `Scene`, `PerspectiveCamera`, `WebGLRenderer`.
    - Añadir iluminación ambiental + direccional.
@@ -121,6 +125,7 @@ Nota: la UI se gestiona desde `game.js` (como en la versión 2D), por lo que no 
 - **B**: menú de construcción.
 - **Espacio**: pausar.
 - **M**: silenciar sonido.
+- **Móvil**: mando táctil, toque para actuar y pulsación larga para seleccionar.
 
 ## Decisiones de diseño 3D
 
@@ -133,7 +138,8 @@ Nota: la UI se gestiona desde `game.js` (como en la versión 2D), por lo que no 
 
 ## Criterios de éxito
 
-- [x] El juego se abre en `index.html` y funciona (verificado en Chrome headless, 0 errores).
+- [x] El juego se sirve localmente y dispone de Three.js sin conexión.
+- [ ] Ejecutar la suite E2E cuando haya una instancia de navegador conectada.
 - [x] Se puede mover al personaje y lanzar el gancho.
 - [x] Se pueden recoger objetos y construir la balsa (recogida solo con gancho; automática si el objeto toca la balsa).
 - [x] Ciclo día/noche visible (cielo, sol, estrellas, iluminación).
@@ -145,7 +151,7 @@ Nota: la UI se gestiona desde `game.js` (como en la versión 2D), por lo que no 
 
 ## Cambios respecto al plan original
 
-- Three.js **0.149.0 build UMD** (no módulos ES) para que el juego funcione abriendo `index.html` directamente desde `file://` sin servidor.
+- Three.js **0.149.0 build UMD** local (no módulos ES), con respaldo CDN.
 - Mar con colores por vértice: gradiente profundidad→cresta, espuma modulada a alta frecuencia y mayor amplitud de olas en tormenta.
 - Personajes low-poly articulados (brazos/piernas con pivote, pelo, ojos) con animación de caminar, remar y lanzar el gancho.
 - Clic derecho selecciona una celda para desmontarla con E (en el 2D la selección no llegó a implementarse).
@@ -156,7 +162,6 @@ Nota: la UI se gestiona desde `game.js` (como en la versión 2D), por lo que no 
 - Sombras y reflejos más elaborados en el agua.
 - Modelo de isla visible al acercarse la victoria por isla; barco de rescate al ganar por radio.
 - Animaciones de construcción y destrucción más vistosas.
-- Optimización: pooling de meshes de objetos flotantes.
 
 ## Notas
 
@@ -182,4 +187,17 @@ Nota: la UI se gestiona desde `game.js` (como en la versión 2D), por lo que no 
 - Radio, motor, cocina, botiquín y estructuras reforzadas pueden repararse.
 - Rutas de radio e isla equilibradas y verificadas mediante simulación completa.
 - Costes, recogidas y cantidades fraccionarias se muestran con nombres en español.
-- Pruebas de regresión: `node tests/gameplay.test.js`.
+- Pruebas unitarias e integración: `npm run test:unit`.
+- Suite completa de navegador preparada: `npm run test:e2e`.
+
+## Revisión jugable — v1.5
+
+- Mar reducido a 4.225 vértices, superficie a 30 Hz y normales/color a 10 Hz.
+- Objetos flotantes y tiburones reutilizan plantillas GPU.
+- Hambre y sed funcionan como reservas; cocinar cuenta como ración del día.
+- Redes, cultivos y purificadores ya no cubren por sí solos a una persona.
+- Toda prestación estructural escala con la salud; a cero queda inoperativa.
+- Timón, remo, vela y motor participan en una navegación real con combustible.
+- Guardado v2 con migración, saneado y autoguardado al ocultar o cerrar.
+- Controles táctiles completos y Three.js local para jugar sin conexión.
+- Simulación, HUD y render 3D separados del controlador `Game`.

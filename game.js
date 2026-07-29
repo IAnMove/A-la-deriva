@@ -1,6 +1,6 @@
 /*****************************************************
- * game.js - Lógica principal, estados, día/noche,
- * eventos, victoria/derrota y UI (versión 3D)
+ * game.js - Controlador y estado de la partida.
+ * Las reglas agregadas, el DOM y el render 3D viven en módulos separados.
  *****************************************************/
 
 const DAY_REAL_SECONDS = 240; // 4 minutos
@@ -28,6 +28,7 @@ const Game = {
     vx: 0, vz: 0,
     speed: 6,
     health: 100, hunger: 90, thirst: 90, morale: 75, stamina: 100, sanity: 100,
+    foodCredit: 0,
     hook: null,
     hookRange: 8,
     hookSpeed: 11,
@@ -38,7 +39,7 @@ const Game = {
   // Recursos
   resources: {
     wood: 0, plastic: 0, cloth: 0, metal: 0, rope: 0,
-    food: 0, water: 0,
+    food: 0, water: 0, fuel: 0,
   },
 
   // Estadísticas
@@ -57,6 +58,7 @@ const Game = {
   rowingBoost: 0,
   rowingBoostZ: 0,
   rowingCooldown: 0,
+  navigationHeading: 0,
   worldOffset: 0,
   worldOffsetZ: 0,
   hallucinationTimer: 0,
@@ -137,11 +139,17 @@ const Game = {
     const p = Save.loadPrefs();
     const soundEnabled = p.sound !== false;
     AudioSys.setEnabled(soundEnabled);
-    document.getElementById('btn-sound').textContent = soundEnabled ? '🔊' : '🔇';
+    GameUI.setSoundButton(soundEnabled);
   },
 
   savePrefs: () => {
     Save.savePrefs({ sound: AudioSys.isEnabled() });
+  },
+
+  toggleSound: () => {
+    AudioSys.setEnabled(!AudioSys.isEnabled());
+    GameUI.setSoundButton(AudioSys.isEnabled());
+    Game.savePrefs();
   },
 
   setState: (s) => {
@@ -170,11 +178,12 @@ const Game = {
     Game.player.vx = 0; Game.player.vz = 0;
     Game.player.health = 100; Game.player.hunger = 90; Game.player.thirst = 90; Game.player.morale = 75;
     Game.player.sanity = 100; Game.player.stamina = 100;
+    Game.player.foodCredit = 0;
     Game.player.hook = null;
     Game.player.rowTarget = null;
     Game.player.moveTarget = null;
 
-    Game.resources = { wood: 4, plastic: 1, cloth: 0, metal: 0, rope: 1, food: 2, water: 1 };
+    Game.resources = { wood: 4, plastic: 1, cloth: 0, metal: 0, rope: 1, food: 2, water: 1, fuel: 0 };
 
     Game.stats = { rescued: 0, abandoned: 0, gathered: 0, maxRaftSize: 1, deathCause: '' };
 
@@ -196,6 +205,7 @@ const Game = {
     Game.rowingBoost = 0;
     Game.rowingBoostZ = 0;
     Game.rowingCooldown = 0;
+    Game.navigationHeading = 0;
     Game.worldOffset = 0;
     Game.worldOffsetZ = 0;
     Game.hallucinationTimer = 0;
@@ -247,6 +257,13 @@ const Game = {
     }, data.player || {});
     Game.player.x = Number.isFinite(Number(Game.player.x)) ? Number(Game.player.x) : 1;
     Game.player.z = Number.isFinite(Number(Game.player.z)) ? Number(Game.player.z) : 1;
+    Game.player.foodCredit = Util.clamp(
+      Number.isFinite(Number(Game.player.foodCredit))
+        ? Number(Game.player.foodCredit)
+        : 0,
+      0,
+      SURVIVAL_BALANCE.playerFoodNeed
+    );
     for (const key of ['health', 'hunger', 'thirst', 'morale', 'stamina', 'sanity']) {
       const fallback = key === 'morale' ? 75 : (key === 'hunger' || key === 'thirst' ? 90 : 100);
       Game.player[key] = Util.clamp(
@@ -260,7 +277,7 @@ const Game = {
     Game.player.moveTarget = null;
     const savedResources = data.resources || {};
     Game.resources = {};
-    for (const key of ['wood', 'plastic', 'cloth', 'metal', 'rope', 'food', 'water']) {
+    for (const key of RESOURCE_KEYS) {
       Game.resources[key] = Math.max(0, Number(savedResources[key]) || 0);
     }
     Game.stats = {
@@ -278,6 +295,11 @@ const Game = {
     Game.currentObjective = Util.clamp(Number(data.currentObjective) || 0, 0, Game.objectives.length - 1);
     Game.worldOffset = Number(data.worldOffset) || 0;
     Game.worldOffsetZ = Number(data.worldOffsetZ) || 0;
+    Game.navigationHeading = Util.clamp(
+      Number.isFinite(Number(data.navigationHeading)) ? Number(data.navigationHeading) : 0,
+      -NAVIGATION_BALANCE.maxHeading,
+      NAVIGATION_BALANCE.maxHeading
+    );
 
     // Reconstruir balsa con meshes
     for (const cell of Game.raft.grid.values()) Game.raft.disposeMesh(cell);
@@ -292,7 +314,8 @@ const Game = {
           BUILDINGS[v.buildingKey].health,
           Number(v.maxHealth) || BUILDINGS[v.buildingKey].health
         );
-        cell.health = Util.clamp(Number(v.health) || cell.maxHealth, 1, cell.maxHealth);
+        const savedHealth = Number(v.health);
+        cell.health = Util.clamp(Number.isFinite(savedHealth) ? savedHealth : cell.maxHealth, 0, cell.maxHealth);
         Game.raft.tintDamaged(cell);
       }
     }
@@ -323,7 +346,8 @@ const Game = {
         x: Game.player.x, z: Game.player.z,
         health: Game.player.health, hunger: Game.player.hunger,
         thirst: Game.player.thirst, morale: Game.player.morale,
-        stamina: Game.player.stamina, sanity: Game.player.sanity
+        stamina: Game.player.stamina, sanity: Game.player.sanity,
+        foodCredit: Game.player.foodCredit
       },
       resources: Game.resources,
       stats: Game.stats,
@@ -336,6 +360,7 @@ const Game = {
       islandDistance: Game.islandDistance,
       radioIntel: Game.radioIntel,
       navigationIntel: Game.navigationIntel,
+      navigationHeading: Game.navigationHeading,
       victoryCondition: Game.victoryCondition,
       currentObjective: Game.currentObjective,
       worldOffset: Game.worldOffset,
@@ -363,11 +388,7 @@ const Game = {
     document.getElementById('btn-save').onclick = Game.saveGame;
     document.getElementById('btn-pause-menu').onclick = () => Game.setState('start');
 
-    document.getElementById('btn-sound').onclick = () => {
-      AudioSys.setEnabled(!AudioSys.isEnabled());
-      document.getElementById('btn-sound').textContent = AudioSys.isEnabled() ? '🔊' : '🔇';
-      Game.savePrefs();
-    };
+    document.getElementById('btn-sound').onclick = Game.toggleSound;
     document.getElementById('btn-pause').onclick = Game.togglePause;
 
     document.getElementById('btn-build').onclick = () => {
@@ -580,6 +601,22 @@ const Game = {
     Game.player.stamina = Math.max(0, Game.player.stamina - 35);
     Game.player.hunger = Math.max(0, Game.player.hunger - 2);
     Game.player.thirst = Math.max(0, Game.player.thirst - 3);
+    const rudderEfficiency = Util.clamp(Game.raft.countProvides('rudder'), 0, 1);
+    if (rudderEfficiency > 0 && Math.abs(push.z) > 0.05) {
+      Game.navigationHeading = Util.clamp(
+        Game.navigationHeading + push.z * NAVIGATION_BALANCE.headingStep * rudderEfficiency,
+        -NAVIGATION_BALANCE.maxHeading,
+        NAVIGATION_BALANCE.maxHeading
+      );
+    }
+    if (Game.victoryCondition === 'island' && Game.islandDistance > 0) {
+      const routeControl = 0.5 + rudderEfficiency * 0.5;
+      const rowProgress = NAVIGATION_BALANCE.rowRouteMeters * routeControl * Game.loadSpeedMultiplier();
+      Game.islandDistance = Math.max(0, Game.islandDistance - rowProgress);
+      if (Game.islandDistance <= 0) {
+        Game.triggerWin('island');
+      }
+    }
     // Salpicaduras
     for (let i = 0; i < 3; i++) {
       const backX = p.x - push.x * (1 + Util.rand(0, 1));
@@ -894,38 +931,7 @@ const Game = {
     return Game.finishFishing(false, 'Pesca cancelada.', announce);
   },
 
-  updateFishingUI: () => {
-    const fishing = Game.fishing;
-    if (!fishing?.active) return;
-    const marker = document.getElementById('fishing-marker');
-    const target = document.getElementById('fishing-target');
-    const timer = document.getElementById('fishing-timer');
-    const progress = document.getElementById('fishing-progress');
-    const instruction = document.getElementById('fishing-instruction');
-    const button = document.getElementById('btn-fishing-pull');
-    const panel = document.getElementById('fishing-panel');
-
-    if (marker) marker.style.left = `${(fishing.marker * 100).toFixed(2)}%`;
-    if (target) {
-      target.style.left = `${((fishing.targetCenter - fishing.targetWidth * 0.5) * 100).toFixed(2)}%`;
-      target.style.width = `${(fishing.targetWidth * 100).toFixed(2)}%`;
-    }
-    if (timer) timer.textContent = `Tiempo: ${fishing.timeLeft.toFixed(1)} s`;
-    if (progress) {
-      progress.textContent = `Tirones ${fishing.hits}/2 · Fallos ${fishing.misses}/2`;
-    }
-    if (instruction) instruction.textContent = fishing.instruction;
-    if (button) button.disabled = fishing.cooldown > 0;
-    if (panel) {
-      panel.classList.toggle('success', fishing.feedback === 'hit');
-      panel.classList.toggle('failure', fishing.feedback === 'miss');
-    }
-    const track = document.getElementById('fishing-track');
-    if (track) {
-      track.classList.toggle('success', fishing.feedback === 'hit');
-      track.classList.toggle('failure', fishing.feedback === 'miss');
-    }
-  },
+  updateFishingUI: () => GameUI.updateFishingUI(Game),
 
   showDecision: (title, text, options) => {
     Game.paused = true;
@@ -948,12 +954,7 @@ const Game = {
     panel.classList.remove('hidden');
   },
 
-  showEventMessage: (text) => {
-    const el = document.getElementById('event-message');
-    el.textContent = text;
-    el.classList.add('show');
-    setTimeout(() => el.classList.remove('show'), 2500);
-  },
+  showEventMessage: (text) => GameUI.showEventMessage(Game, text),
 
   showFloatingText: (x, z, text, color = '#fff') => {
     FloatingText.add(x, 1.4, z, text, color);
@@ -969,88 +970,7 @@ const Game = {
   },
 
   // ---- Actualización principal ----
-  update: (dt) => {
-    if (Game.fishing?.active) {
-      Game.updateFishing(dt);
-      Input.resetClick();
-      return;
-    }
-    if (Game.menuModalOpen() && Input.wasPressed('Escape')) {
-      Game.closeAllModals();
-      Game.raft.selected = null;
-      Input.resetClick();
-      return;
-    }
-    if (BuildManager.active && Game.paused && Input.wasPressed('KeyB')) {
-      Game.closeAllModals();
-      Input.resetClick();
-      return;
-    }
-    if (Input.wasPressed('Space') &&
-        (Game.state === 'paused' || (Game.state === 'playing' && !Game.paused))) {
-      Game.togglePause();
-      Input.resetClick();
-      return;
-    }
-    if (Input.wasPressed('KeyM')) {
-      AudioSys.setEnabled(!AudioSys.isEnabled());
-      document.getElementById('btn-sound').textContent = AudioSys.isEnabled() ? '🔊' : '🔇';
-      Game.savePrefs();
-    }
-    if (Game.state !== 'playing' || Game.paused) { Input.resetClick(); return; }
-
-    // Punto del mundo bajo el cursor
-    Game.mouseWorld = World.mouseToWorld(Input.mouse.x, Input.mouse.y);
-
-    Game.updateTime(dt);
-    if (Game.paused || Game.state !== 'playing') { Input.resetClick(); return; }
-    Game.updateZone(dt);
-    Game.updatePlayer(dt);
-
-    if ((Input.isDown('ShiftLeft') || Input.isDown('ShiftRight')) && !BuildManager.active && !BuildManager.placing && !Game.player.rowTarget) Game.row();
-    if (Game.rowingCooldown > 0) Game.rowingCooldown -= dt;
-    if (Game.rowingBoost > 0) Game.rowingBoost = Math.max(0, Game.rowingBoost - dt * 0.4);
-    if (Game.rowingBoostZ !== 0) Game.rowingBoostZ = Math.abs(Game.rowingBoostZ) < 0.01 ? 0 : Game.rowingBoostZ - Math.sign(Game.rowingBoostZ) * dt * 0.4;
-    Game.player.stamina = Math.min(100, Game.player.stamina + dt * 4);
-    if (Game.heat) Game.player.thirst = Math.max(0, Game.player.thirst - dt * 0.2);
-
-    // Alucinaciones por baja cordura
-    if (Game.player.sanity < 40) {
-      Game.hallucinationTimer -= dt;
-      if (Game.hallucinationTimer <= 0) {
-        Game.hallucinationTimer = Util.rand(6, 14);
-        const msgs = ['¿Has oído eso?', 'El mar susurra tu nombre...', '¿Era una sombra?', 'No estás solo...', '¿Dónde está todo el mundo?'];
-        Game.showEventMessage(Util.choice(msgs));
-      }
-    }
-
-    Game.updateHook(dt);
-    if (Game.paused || Game.state !== 'playing') { Input.resetClick(); return; }
-    Game.updateEntities(dt);
-    Game.updateProduction(dt);
-    Game.checkEvents(dt);
-    Game.checkWinLose();
-    Game.updateObjective();
-    Game.updateUI();
-    Game.updateHighlights();
-
-    FloatingText.update(dt);
-    Particles.update(dt);
-
-    // Clics
-    if (Input.mouse.clicked) Game.handleLeftClick();
-    if (Input.mouse.rightClicked) Game.handleRightClick();
-    Input.resetClick();
-
-    // Teclas UI
-    if (Input.wasPressed('KeyB')) {
-      if (BuildManager.placing) { BuildManager.stopPlacing(); }
-      BuildManager.toggle();
-      Game.updateBuildMenu();
-    }
-    if (Input.wasPressed('KeyE')) Game.interact();
-    if (Input.wasPressed('Escape')) { Game.closeAllModals(); BuildManager.close(); Game.raft.selected = null; }
-  },
+  update: (dt) => GameSimulation.update(Game, dt),
 
   updateTime: (dt) => {
     Game.time += dt / SECONDS_PER_HOUR;
@@ -1282,11 +1202,19 @@ const Game = {
 
   updateEntities: (dt) => {
     const driftBonus = CrewManager.getDriftBonus();
-    const sailBonus = Game.raft.countProvides('sail') ? 0.5 : 0;
-    const motorBonus = Game.raft.countProvides('motor') ? 1.0 : 0;
+    const sailEfficiency = Util.clamp(Game.raft.countProvides('sail'), 0, 1);
+    const rudderEfficiency = Util.clamp(Game.raft.countProvides('rudder'), 0, 1);
+    const motorEfficiency = Util.clamp(Game.raft.countProvides('motor'), 0, 1);
+    const sailBonus = sailEfficiency * 0.5;
+    const motorBonus = Game.victoryCondition === 'island' &&
+      (Game.resources.fuel || 0) > 0
+      ? motorEfficiency
+      : 0;
     const loadMul = Game.loadSpeedMultiplier();
     const currentSpeed = (0.75 + driftBonus * 0.75 + sailBonus + motorBonus + Game.rowingBoost) * loadMul;
-    const currentSpeedZ = Game.rowingBoostZ * loadMul;
+    const steeringSpeed = (sailBonus + motorBonus) * rudderEfficiency *
+      Game.navigationHeading * NAVIGATION_BALANCE.lateralSteering;
+    const currentSpeedZ = (Game.rowingBoostZ + steeringSpeed) * loadMul;
     Game.worldOffset += currentSpeed * dt;
     Game.worldOffsetZ += currentSpeedZ * dt;
 
@@ -1319,24 +1247,25 @@ const Game = {
   },
 
   updateProduction: (dt) => {
+    const dayFraction = Math.max(0, dt) / DAY_REAL_SECONDS;
     if (Game.rain) {
       const rainCollectors = Game.raft.countProvides('rainWater');
       if (rainCollectors > 0) {
-        Game.resources.water += rainCollectors * dt * 0.05;
+        Game.resources.water += rainCollectors * dayFraction;
       }
     }
     const autoFood = Game.raft.totalAutoFood();
     if (autoFood > 0) {
-      Game.resources.food += autoFood * dt * 0.02;
+      Game.resources.food += autoFood * dayFraction;
     }
     const purifierWater = Game.raft.countProvides('purifiedWater');
     if (purifierWater > 0) {
-      Game.resources.water += purifierWater * dt * 0.015;
+      Game.resources.water += purifierWater * dayFraction;
     }
   },
 
   cargoWeight: () => {
-    const weights = { wood: 0.25, plastic: 0.15, cloth: 0.1, metal: 0.4, rope: 0.15, food: 0.2, water: 0.3 };
+    const weights = { wood: 0.25, plastic: 0.15, cloth: 0.1, metal: 0.4, rope: 0.15, food: 0.2, water: 0.3, fuel: 0.25 };
     return Object.entries(weights).reduce((total, [key, weight]) => {
       return total + Math.max(0, Game.resources[key] || 0) * weight;
     }, 0);
@@ -1357,6 +1286,16 @@ const Game = {
       Game.player[key] = Util.clamp(Game.player[key], 0, 100);
     }
   },
+
+  getDailyNeeds: () => GameSimulation.getDailyNeeds(Game),
+
+  resolveDailySupplies: () => GameSimulation.resolveDailySupplies(Game),
+
+  getNavigationState: () => GameSimulation.getNavigationState(Game),
+
+  refuelMotor: () => GameSimulation.refuelMotor(Game),
+
+  resolveNavigationDay: () => GameSimulation.resolveNavigationDay(Game),
 
   interact: () => {
     const p = Game.player;
@@ -1394,6 +1333,7 @@ const Game = {
     if (!cell) return;
     const b = BUILDINGS[cell.buildingKey];
     const maxHealth = cell.maxHealth || b.health;
+    const efficiency = Game.raft.cellEfficiency(cell);
 
     // Una estructura dañada se repara antes de ejecutar su acción especial.
     if (cell.health < maxHealth && Game.resources.wood >= 1) {
@@ -1404,12 +1344,25 @@ const Game = {
       return;
     }
 
+    if (efficiency <= 0) {
+      Game.showFloatingText(p.x, p.z, 'Estructura inoperativa: necesita reparación', '#ef5350');
+      return;
+    }
+
     if (b.key === 'fire' || b.key === 'kitchen') {
       if (Game.resources.food >= 1) {
         Game.resources.food -= 1;
         const isKitchen = b.key === 'kitchen';
-        Game.player.hunger = Math.min(100, Game.player.hunger + (isKitchen ? 30 : 20));
-        Game.player.health = Math.min(100, Game.player.health + (isKitchen ? 8 : 5));
+        const mealCredit = (isKitchen ? 1 : 0.8) * efficiency;
+        Game.player.foodCredit = Math.min(
+          SURVIVAL_BALANCE.playerFoodNeed,
+          (Game.player.foodCredit || 0) + mealCredit
+        );
+        Game.player.hunger = Math.min(
+          100,
+          Game.player.hunger + (isKitchen ? 12 : 8) * efficiency
+        );
+        Game.player.health = Math.min(100, Game.player.health + (isKitchen ? 8 : 5) * efficiency);
         Game.showFloatingText(p.x, p.z, 'Ración cocinada y consumida');
         AudioSys.play('collect');
       } else {
@@ -1418,8 +1371,9 @@ const Game = {
     } else if (b.key === 'medkit') {
       if (Game.resources.cloth >= 1 && Game.player.health < 100) {
         Game.resources.cloth -= 1;
-        Game.player.health = Math.min(100, Game.player.health + 25);
-        Game.showFloatingText(p.x, p.z, '+25 salud');
+        const healing = Math.round(25 * efficiency);
+        Game.player.health = Math.min(100, Game.player.health + healing);
+        Game.showFloatingText(p.x, p.z, `+${healing} salud`);
         AudioSys.play('collect');
       } else {
         Game.showFloatingText(p.x, p.z, Game.player.health >= 100 ? 'Ya estás sano' : 'Necesitas 1 tela', '#ef5350');
@@ -1439,9 +1393,35 @@ const Game = {
       } else {
         Game.showFloatingText(p.x, p.z, `Señal automática ${Game.rescuedSignal.toFixed(0)}%`);
       }
+    } else if (b.key === 'rudder') {
+      const headings = [-1, 0, 1];
+      const currentIndex = headings.reduce((best, value, index) =>
+        Math.abs(value - Game.navigationHeading) < Math.abs(headings[best] - Game.navigationHeading)
+          ? index
+          : best, 0);
+      Game.navigationHeading = headings[(currentIndex + 1) % headings.length];
+      const label = Game.navigationHeading < 0 ? 'babor' : (Game.navigationHeading > 0 ? 'estribor' : 'recto');
+      Game.showFloatingText(p.x, p.z, `Rumbo: ${label}`, '#4fc3f7');
+      Log.add(`El timón fija el rumbo hacia ${label}.`);
     } else if (b.key === 'motor') {
-      if (Game.raft.countProvides('sail') && Game.raft.countProvides('rudder')) {
-        Game.showDecision('Navegar hacia la isla', 'El motor y el timón están listos. ¿Partir hacia la isla más cercana?', [
+      if ((Game.resources.fuel || 0) < NAVIGATION_BALANCE.motorFuelPerDay) {
+        if (Game.refuelMotor()) {
+          Game.showFloatingText(
+            p.x,
+            p.z,
+            `+${NAVIGATION_BALANCE.plasticFuelYield} combustible (-1 plástico)`,
+            '#ffca28'
+          );
+          Log.add('Conviertes una pieza de plástico en combustible para el motor.');
+        } else {
+          Game.showFloatingText(p.x, p.z, 'Necesitas 1 plástico para fabricar combustible', '#ef5350');
+        }
+        return;
+      }
+      if (Game.victoryCondition === 'island') {
+        Game.showFloatingText(p.x, p.z, `Combustible: ${Game.resources.fuel.toFixed(1)}`, '#ffca28');
+      } else if (Game.raft.countProvides('sail') && Game.raft.countProvides('rudder')) {
+        Game.showDecision('Navegar hacia la isla', 'Vela y timón listos. El motor gastará 0,5 de combustible al día. ¿Partir?', [
           { label: 'Sí', action: () => {
             Game.victoryCondition = 'island';
             Game.islandDistance = Math.max(150, 300 - Game.navigationIntel);
@@ -1471,45 +1451,9 @@ const Game = {
     for (const note of storyNotes) Log.add(note);
     if (workNotes.length) Log.add(`Trabajo de la tripulación: ${workNotes.join(' ')}`);
 
-    const crewCount = CrewManager.count();
-
-    const playerFoodNeed = 1;
-    const playerWaterNeed = 1.3;
-    const crewFoodNeed = CrewManager.getDailyFoodNeed();
-    const crewWaterNeed = crewCount * 1.3;
-
-    const totalFoodNeed = playerFoodNeed + crewFoodNeed;
-    const totalWaterNeed = playerWaterNeed + crewWaterNeed;
-
-    const foodConsumed = Math.min(Game.resources.food, totalFoodNeed);
-    const waterConsumed = Math.min(Game.resources.water, totalWaterNeed);
-    Game.resources.food -= foodConsumed;
-    Game.resources.water -= waterConsumed;
-
-    const playerFoodShare = totalFoodNeed > 0 ? (playerFoodNeed / totalFoodNeed) * foodConsumed : 0;
-    const playerWaterShare = totalWaterNeed > 0 ? (playerWaterNeed / totalWaterNeed) * waterConsumed : 0;
-
-    Game.player.hunger = Math.min(100, Game.player.hunger + playerFoodShare * 12);
-    Game.player.thirst = Math.min(100, Game.player.thirst + playerWaterShare * 12);
-
-    if (playerFoodShare < playerFoodNeed * 0.8) {
-      Game.player.health -= (playerFoodNeed - playerFoodShare) * 5;
-      Game.player.morale -= 5;
-      Game.player.hunger = Math.max(0, Game.player.hunger - (playerFoodNeed - playerFoodShare) * 10);
-    } else {
-      Game.player.health = Math.min(100, Game.player.health + 1);
-    }
-    if (playerWaterShare < playerWaterNeed * 0.8) {
-      Game.player.health -= (playerWaterNeed - playerWaterShare) * 8;
-      Game.player.morale -= 8;
-      Game.player.thirst = Math.max(0, Game.player.thirst - (playerWaterNeed - playerWaterShare) * 12);
-    } else {
-      Game.player.health = Math.min(100, Game.player.health + 1);
-    }
-
-    const crewFoodShare = foodConsumed - playerFoodShare;
-    const crewWaterShare = waterConsumed - playerWaterShare;
-    CrewManager.dailyUpdateByShare(crewFoodShare, crewWaterShare, Game.storm);
+    const supplyReport = Game.resolveDailySupplies();
+    const foodConsumed = supplyReport.foodConsumed;
+    const waterConsumed = supplyReport.waterConsumed;
 
     const heal = Game.raft.countProvides('heal');
     if (heal > 0) Game.player.health = Math.min(100, Game.player.health + heal);
@@ -1537,26 +1481,17 @@ const Game = {
     Game.checkWinLose();
     if (Game.state !== 'playing') return;
 
-    if (Game.victoryCondition === 'radio' && Game.raft.countProvides('radio')) {
-      Game.rescuedSignal += 8 + Game.raft.countProvides('mast') * 4;
+    const radioEfficiency = Util.clamp(Game.raft.countProvides('radio'), 0, 1);
+    if (Game.victoryCondition === 'radio' && radioEfficiency > 0) {
+      Game.rescuedSignal += 8 * radioEfficiency + Game.raft.countProvides('mast') * 4;
       if (Game.rescuedSignal >= 100) {
         Game.triggerWin('radio');
         return;
       }
     }
     if (Game.victoryCondition === 'island') {
-      const navigationReady = Game.raft.countProvides('motor') &&
-        Game.raft.countProvides('sail') && Game.raft.countProvides('rudder');
-      if (navigationReady) {
-        const nav = (25 + CrewManager.getDriftBonus() * 20) * Game.loadSpeedMultiplier();
-        Game.islandDistance -= nav;
-        if (Game.islandDistance <= 0) {
-          Game.triggerWin('island');
-          return;
-        }
-      } else {
-        Log.add('El viaje a la isla se detiene: faltan motor, vela o timón.');
-      }
+      Game.resolveNavigationDay();
+      if (Game.state !== 'playing') return;
     }
 
     Game.updateObjective();
@@ -1681,29 +1616,12 @@ const Game = {
     if (crew >= 1) idx = 4;
     if (Game.raft.countProvides('sail') && Game.raft.countProvides('rudder')) idx = 5;
     Game.currentObjective = idx;
-    document.getElementById('objective-text').textContent = Game.objectives[idx];
+    GameUI.setObjective(Game.objectives[idx]);
   },
 
   showDaySummary: (food, water, events, crewNotes = []) => {
     Game.paused = true;
-    const panel = document.getElementById('day-summary');
-    const content = document.getElementById('summary-content');
-    let html = `
-      <div class="summary-line"><strong>Recursos consumidos:</strong> ${food.toFixed(1)} comida, ${water.toFixed(1)} agua</div>
-      <div class="summary-line"><strong>Tripulación:</strong> ${CrewManager.count()} supervivientes</div>
-      <div class="summary-line"><strong>Balsa:</strong> ${Game.raft.totalArea()} módulos</div>
-    `;
-    if (Game.victoryCondition === 'radio') html += `<div class="summary-line"><strong>Señal de socorro:</strong> ${Game.rescuedSignal.toFixed(0)}%</div>`;
-    if (Game.victoryCondition === 'island') html += `<div class="summary-line"><strong>Distancia a la isla:</strong> ${Math.max(0, Game.islandDistance).toFixed(0)} m</div>`;
-    if (events.length) html += `<div class="summary-line"><strong>Sucesos:</strong> ${events.map(Game.eventName).join(', ')}</div>`;
-    if (crewNotes.length) {
-      const safe = crewNotes.map(note => typeof escapeSurvivorHtml === 'function'
-        ? escapeSurvivorHtml(note)
-        : String(note));
-      html += `<div class="summary-line"><strong>Tripulación:</strong><ul>${safe.map(note => `<li>${note}</li>`).join('')}</ul></div>`;
-    }
-    content.innerHTML = html;
-    panel.classList.remove('hidden');
+    GameUI.showDaySummary(Game, food, water, events, crewNotes);
   },
 
   eventName: (ev) => {
@@ -1766,195 +1684,21 @@ const Game = {
     return Math.floor(s);
   },
 
-  endStatsHtml: (win, score) => {
-    return `
-      <div class="summary-line">Días sobrevividos: <strong>${Game.day}</strong></div>
-      <div class="summary-line">Personas rescatadas: <strong>${Game.stats.rescued}</strong></div>
-      <div class="summary-line">Personas abandonadas: <strong>${Game.stats.abandoned}</strong></div>
-      <div class="summary-line">Recursos recogidos: <strong>${Game.stats.gathered}</strong></div>
-      <div class="summary-line">Tamaño máximo de la balsa: <strong>${Game.stats.maxRaftSize}</strong></div>
-      <div class="summary-line">Mejor puntuación: <strong>${Save.loadBest()}</strong></div>
-      <div class="summary-line">Puntuación final: <strong>${score}</strong></div>
-    `;
-  },
+  endStatsHtml: (win, score) => GameUI.endStatsHtml(Game, win, score),
 
-  updateUI: () => {
-    if (Game.state !== 'playing') return;
-    document.getElementById('day-label').textContent = `Día ${Game.day}`;
-    document.getElementById('time-label').textContent = Util.formatTime(Game.time);
-    const phase = Game.time < 6 ? 'Noche' : Game.time < 12 ? 'Mañana' : Game.time < 18 ? 'Tarde' : 'Noche';
-    document.getElementById('phase-label').textContent = `${phase} · ${Game.zoneName(Game.zone)}`;
+  updateUI: () => GameUI.updateUI(Game),
 
-    Game.setBar('bar-health', Game.player.health);
-    Game.setBar('bar-hunger', Game.player.hunger);
-    Game.setBar('bar-thirst', Game.player.thirst);
-    Game.setBar('bar-morale', Game.player.morale);
-    Game.setBar('bar-stamina', Game.player.stamina);
-    Game.setBar('bar-sanity', Game.player.sanity);
-
-    document.getElementById('food-label').textContent = `🍖 ${Util.formatAmount(Game.resources.food)}`;
-    document.getElementById('water-label').textContent = `💧 ${Util.formatAmount(Game.resources.water)}`;
-    const totalWeight = Game.totalWeight();
-    const maxW = Game.raft.maxWeight();
-    const wl = document.getElementById('weight-label');
-    wl.textContent = `⚖ ${totalWeight.toFixed(1)}/${maxW.toFixed(1)}`;
-    wl.style.color = totalWeight > maxW ? 'var(--danger)' : '';
-
-    document.getElementById('res-wood').textContent = Util.formatAmount(Game.resources.wood);
-    document.getElementById('res-plastic').textContent = Util.formatAmount(Game.resources.plastic);
-    document.getElementById('res-cloth').textContent = Util.formatAmount(Game.resources.cloth);
-    document.getElementById('res-metal').textContent = Util.formatAmount(Game.resources.metal);
-    document.getElementById('res-rope').textContent = Util.formatAmount(Game.resources.rope);
-
-    const crewCount = CrewManager.count();
-    document.getElementById('daily-food').textContent = (1 + CrewManager.getDailyFoodNeed()).toFixed(1);
-    document.getElementById('daily-water').textContent = ((crewCount + 1) * 1.3).toFixed(1);
-    let totalHealth = 0, totalMax = 0;
-    for (const cell of Game.raft.grid.values()) {
-      totalHealth += cell.health;
-      totalMax += cell.maxHealth || BUILDINGS[cell.buildingKey].health;
-    }
-    const structPct = totalMax > 0 ? Math.floor((totalHealth / totalMax) * 100) : 0;
-    const sh = document.getElementById('structural-health');
-    sh.textContent = `${structPct}%`;
-    sh.style.color = structPct < 40 ? 'var(--danger)' : (structPct < 70 ? 'var(--warning)' : 'var(--success)');
-
-    const rowEl = document.getElementById('rowing-status');
-    if (Game.rowingCooldown > 0) {
-      rowEl.textContent = `${Game.rowingCooldown.toFixed(1)}s`;
-      rowEl.style.color = 'var(--warning)';
-    } else {
-      rowEl.textContent = 'listo';
-      rowEl.style.color = 'var(--success)';
-    }
-
-    // Overlays de efectos
-    document.getElementById('fx-heat').style.opacity = Game.heat ? 1 : 0;
-    const sanity = Game.player.sanity;
-    document.getElementById('fx-hallucination').style.opacity = sanity < 50 ? ((50 - sanity) / 50) * 0.9 : 0;
-  },
-
-  setBar: (id, value) => {
-    const el = document.getElementById(id);
-    const safeValue = Util.clamp(Number(value) || 0, 0, 100);
-    el.style.width = `${safeValue}%`;
-    el.classList.toggle('low', safeValue < 25);
-  },
+  setBar: (id, value) => GameUI.setBar(id, value),
 
   // ---- Highlights 3D (colocación, remo, selección) ----
   updateHighlights: () => {
-    const cs = Game.raft.cellSize;
-
-    // Reconstruir corona de remo / celdas válidas si cambió la balsa
-    if (Game.highlightsDirty) {
-      Game.highlightsDirty = false;
-
-      // Corona de remo
-      while (Game.rowGroup.children.length) {
-        const c = Game.rowGroup.children[0];
-        Game.rowGroup.remove(c);
-        c.geometry.dispose();
-      }
-      const bounds = Game.raft.getBounds();
-      const rowMat = new THREE.MeshBasicMaterial({ color: 0x4fc3f7, transparent: true, opacity: 0.10 });
-      const validMat = new THREE.MeshBasicMaterial({ color: 0x66bb6a, transparent: true, opacity: 0.18 });
-      while (Game.highlightGroup.children.length) {
-        const c = Game.highlightGroup.children[0];
-        Game.highlightGroup.remove(c);
-        c.geometry.dispose();
-      }
-      for (let gx = bounds.minX - 1; gx <= bounds.maxX + 1; gx++) {
-        for (let gy = bounds.minY - 1; gy <= bounds.maxY + 1; gy++) {
-          if (Game.raft.has(gx, gy) || !Game.raft.isConnected(gx, gy)) continue;
-          const rm = new THREE.Mesh(new THREE.BoxGeometry(cs - 0.15, 0.1, cs - 0.15), rowMat);
-          rm.position.set((gx + 0.5) * cs, 0.05, (gy + 0.5) * cs);
-          Game.rowGroup.add(rm);
-          const vm = new THREE.Mesh(new THREE.BoxGeometry(cs - 0.15, 0.1, cs - 0.15), validMat);
-          vm.position.set((gx + 0.5) * cs, 0.06, (gy + 0.5) * cs);
-          Game.highlightGroup.add(vm);
-        }
-      }
-    }
-
-    const placing = BuildManager.placing && BuildManager.selected;
-    Game.highlightGroup.visible = !!placing;
-    Game.rowGroup.visible = !placing && Game.state === 'playing';
-
-    // Fantasma de colocación y celda de remo bajo el cursor
-    Game.ghostMesh.visible = false;
-    Game.hoverRowMesh.visible = false;
-    if (Game.mouseWorld) {
-      const { gx, gy } = Game.raft.worldToGrid(Game.mouseWorld.x, Game.mouseWorld.z);
-      if (placing) {
-        Game.ghostMesh.visible = true;
-        const valid = !Game.raft.has(gx, gy) && Game.raft.isConnected(gx, gy);
-        Game.ghostMesh.material.color.setHex(valid ? 0x66bb6a : 0xef5350);
-        Game.ghostMesh.position.set((gx + 0.5) * cs, 0.35, (gy + 0.5) * cs);
-      } else if (Game.isRowingCell(gx, gy)) {
-        Game.hoverRowMesh.visible = true;
-        Game.hoverRowMesh.position.set((gx + 0.5) * cs, 0.12, (gy + 0.5) * cs);
-      }
-    }
-
-    // Selección
-    if (Game.raft.selected) {
-      Game.selectionMesh.visible = true;
-      Game.selectionMesh.position.set(
-        (Game.raft.selected.gx + 0.5) * cs, 0.4,
-        (Game.raft.selected.gy + 0.5) * cs
-      );
-    } else {
-      Game.selectionMesh.visible = false;
-    }
+    GameRenderer.updateHighlights(Game);
   },
 
   elapsed: 0,
 
   // ---- Renderizado ----
   draw: (dt) => {
-    Game.elapsed += dt;
-    const time = Game.elapsed;
-    const center = Game.raft.getCenter();
-
-    // Balanceo de la balsa con las olas
-    if (Game.raft.group) {
-      const wh = World.waveHeight(center.x, center.z, time, Game.worldOffset, Game.worldOffsetZ);
-      Game.raft.group.position.y = wh * World.waveAmp * 0.6;
-      const rockMul = Game.storm ? 2.2 : 1;
-      Game.raft.group.rotation.x = Math.sin(time * 0.9) * 0.015 * rockMul;
-      Game.raft.group.rotation.z = Math.cos(time * 0.7) * 0.018 * rockMul;
-    }
-
-    // Animar llamas y hélices
-    if (Game.raft.group) {
-      Game.raft.group.traverse(o => {
-        if (o.name === 'flame') {
-          const s = 0.9 + Math.sin(time * 12 + o.id) * 0.2;
-          o.scale.set(s, 1 + Math.sin(time * 15 + o.id) * 0.25, s);
-        } else if (o.name === 'prop') {
-          o.rotation.x += dt * 6;
-        }
-      });
-    }
-
-    // Jugador y tripulación
-    PlayerVis.sync(Game.player, dt, time);
-    PlayerVis.updateAim(Game.player, BuildManager.placing ? null : Game.mouseWorld);
-    if (Game.fishing?.active && Game.player.hook) {
-      HookVis.show(
-        Game.player.x,
-        Game.player.z,
-        Game.player.hook.x,
-        Game.player.hook.z
-      );
-    }
-    CrewManager.syncMeshes(Game.raft);
-
-    // Mundo
-    World.updateCamera(center, Game.raft.getBounds(), dt, Game.raft.cellSize);
-    World.updateSea(time, Game.worldOffset, Game.worldOffsetZ, Game.storm);
-    World.updateDayNight(Game.time, Game.storm, Game.fog, dt);
-    World.updateRain(dt, Game.rain);
-    World.render();
+    GameRenderer.draw(Game, dt);
   }
 };

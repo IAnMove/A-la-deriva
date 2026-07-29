@@ -25,6 +25,14 @@ const World = {
   cameraDragX: 0,
   CAMERA_MIN_ZOOM: 0.58,
   CAMERA_MAX_YAW: THREE.MathUtils.degToRad(35),
+  // La superficie no necesita la misma frecuencia que el render. Separar
+  // geometria, color y normales evita trabajo cuando el juego esta pausado.
+  SEA_SEGMENTS: 64,
+  SEA_SURFACE_INTERVAL: 1 / 30,
+  SEA_DETAIL_INTERVAL: 1 / 10,
+  seaLastSurfaceTime: -Infinity,
+  seaLastDetailTime: -Infinity,
+  seaLastStorm: null,
   waveAmp: 0.18,
   lightning: 0,
 
@@ -68,7 +76,7 @@ const World = {
     World.scene.add(World.sunLight);
 
     // Mar: plano con vértices animados
-    const SEG = 100, SIZE = 160;
+    const SEG = World.SEA_SEGMENTS, SIZE = 160;
     World.seaGeo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
     World.seaGeo.rotateX(-Math.PI / 2);
     // Colores por vértice: profundidad, crestas y espuma
@@ -87,6 +95,9 @@ const World = {
     World.sea = new THREE.Mesh(World.seaGeo, seaMat);
     World.sea.receiveShadow = true;
     World.scene.add(World.sea);
+    World.seaLastSurfaceTime = -Infinity;
+    World.seaLastDetailTime = -Infinity;
+    World.seaLastStorm = null;
 
     // Estrellas (visibles de noche)
     const starGeo = new THREE.BufferGeometry();
@@ -183,15 +194,47 @@ const World = {
   waterDeep: new THREE.Color(0x0a3a5e),
   waterLight: new THREE.Color(0x2a8ac8),
   foamColor: new THREE.Color(0xeaf6ff),
+  phaseSky: new THREE.Color(0),
+  phaseSkyTarget: new THREE.Color(0),
+  phaseWater: new THREE.Color(0),
+  phaseWaterTarget: new THREE.Color(0),
+  phaseSun: new THREE.Color(0),
+  phaseSunTarget: new THREE.Color(0),
+  lightningColor: new THREE.Color(0xffffff),
 
   updateSea: (time, offsetX, offsetZ, storm) => {
-    const targetAmp = storm ? 0.8 : 0.35;
-    World.waveAmp = Util.lerp(World.waveAmp, targetAmp, 0.02);
-    const pos = World.seaGeo.attributes.position;
-    const colAttr = World.seaGeo.attributes.color;
     const cam = World.camTarget;
     // El mar sigue a la cámara
     World.sea.position.set(cam.x, 0, cam.z);
+
+    // Game.elapsed se detiene en menus/pausa. En ese estado basta con mover
+    // el plano: no hay una ola nueva que recalcular ni subir a la GPU.
+    const surfaceElapsed = time - World.seaLastSurfaceTime;
+    const timeReset = !Number.isFinite(surfaceElapsed) || surfaceElapsed < 0;
+    const stormChanged = World.seaLastStorm !== storm;
+    if (!timeReset && !stormChanged && surfaceElapsed < World.SEA_SURFACE_INTERVAL) return;
+    World.seaLastSurfaceTime = time;
+
+    const targetAmp = storm ? 0.8 : 0.35;
+    const surfaceStep = timeReset || surfaceElapsed <= 0
+      ? World.SEA_SURFACE_INTERVAL
+      : Math.min(surfaceElapsed, 0.1);
+    // Equivalente al lerp histórico de 0,02 a 60 FPS, pero independiente
+    // del framerate y completamente detenido cuando el reloj no avanza.
+    const amplitudeBlend = 1 - Math.exp(-surfaceStep * 1.212);
+    World.waveAmp = Util.lerp(World.waveAmp, targetAmp, amplitudeBlend);
+
+    const detailElapsed = time - World.seaLastDetailTime;
+    const refreshDetail = timeReset || stormChanged ||
+      !Number.isFinite(detailElapsed) || detailElapsed < 0 ||
+      detailElapsed >= World.SEA_DETAIL_INTERVAL;
+    if (refreshDetail) {
+      World.seaLastDetailTime = time;
+      World.seaLastStorm = storm;
+    }
+
+    const pos = World.seaGeo.attributes.position;
+    const colAttr = World.seaGeo.attributes.color;
     const deep = World.waterDeep, light = World.waterLight, foam = World.foamColor;
     const amp = World.waveAmp;
     const foamTh = 0.8; // umbral de cresta para espuma
@@ -200,6 +243,7 @@ const World = {
       const z = pos.getZ(i) + cam.z;
       const h = World.waveHeight(x, z, time, offsetX, offsetZ); // ~[-1.1, 1.1]
       pos.setY(i, h * amp);
+      if (!refreshDetail) continue;
       // Gradiente valle -> cresta
       const t = Util.clamp((h + 1) * 0.5, 0, 1);
       let r = deep.r + (light.r - deep.r) * t;
@@ -216,12 +260,15 @@ const World = {
       colAttr.setXYZ(i, r, g, b);
     }
     pos.needsUpdate = true;
-    colAttr.needsUpdate = true;
-    World.seaGeo.computeVertexNormals();
+    if (refreshDetail) {
+      colAttr.needsUpdate = true;
+      World.seaGeo.computeVertexNormals();
+    }
   },
 
   // Actualiza iluminación/cielo según la hora del día (0-24)
   updateDayNight: (hour, storm, fogActive, dt = 1 / 60) => {
+    const safeDt = Math.max(0, Math.min(Number(dt) || 0, 0.1));
     let a, b, t;
     if (hour < 5 || hour >= 21) { a = b = World.PHASES.night; t = 0; }
     else if (hour < 8) { a = World.PHASES.night; b = World.PHASES.dawn; t = (hour - 5) / 3; }
@@ -230,9 +277,14 @@ const World = {
     else if (hour < 19) { a = World.PHASES.day; b = World.PHASES.dusk; t = (hour - 17) / 2; }
     else { a = World.PHASES.dusk; b = World.PHASES.night; t = (hour - 19) / 2; }
 
-    const sky = new THREE.Color(a.sky).lerp(new THREE.Color(b.sky), t);
-    const water = new THREE.Color(a.water).lerp(new THREE.Color(b.water), t);
-    const sunC = new THREE.Color(a.sun).lerp(new THREE.Color(b.sun), t);
+    // Reutilizar colores temporales evita varias asignaciones y pausas de GC
+    // por fotograma durante el ciclo dia/noche.
+    const sky = World.phaseSky.setHex(a.sky)
+      .lerp(World.phaseSkyTarget.setHex(b.sky), t);
+    const water = World.phaseWater.setHex(a.water)
+      .lerp(World.phaseWaterTarget.setHex(b.water), t);
+    const sunC = World.phaseSun.setHex(a.sun)
+      .lerp(World.phaseSunTarget.setHex(b.sun), t);
     let sunI = Util.lerp(a.sunI, b.sunI, t);
     let ambI = Util.lerp(a.ambI, b.ambI, t);
     let fogFar = Util.lerp(a.fog, b.fog, t);
@@ -266,16 +318,19 @@ const World = {
     fogFar = Math.max(fogFar, fogNear + 12);
 
     // Relámpagos durante la tormenta
-    if (storm && Math.random() < 0.006) World.lightning = 1;
+    if (storm && safeDt > 0 &&
+        Math.random() < 1 - Math.exp(-safeDt / 2.77)) {
+      World.lightning = 1;
+    }
     if (World.lightning > 0) {
-      World.lightning = Math.max(0, World.lightning - 0.06);
+      World.lightning = Math.max(0, World.lightning - safeDt * 3.6);
       ambI += World.lightning * 1.6;
-      sky.lerp(new THREE.Color(0xffffff), World.lightning * 0.5);
+      sky.lerp(World.lightningColor, World.lightning * 0.5);
     }
 
     World.scene.background.copy(sky);
     World.scene.fog.color.copy(sky);
-    const fogBlend = 1 - Math.exp(-Math.max(0, dt) * 4);
+    const fogBlend = 1 - Math.exp(-safeDt * 4);
     World.scene.fog.near = Util.lerp(World.scene.fog.near, fogNear, fogBlend);
     World.scene.fog.far = Util.lerp(World.scene.fog.far, fogFar, fogBlend);
     if (World.scene.fog.near >= World.scene.fog.far) {
@@ -297,13 +352,18 @@ const World = {
 
     // Estrellas de noche
     const night = (hour < 5.5 || hour > 20);
-    World.stars.material.opacity = Util.lerp(World.stars.material.opacity, night && !storm ? 0.9 : 0, 0.05);
+    const starBlend = 1 - Math.exp(-safeDt * 3.08);
+    World.stars.material.opacity = Util.lerp(
+      World.stars.material.opacity,
+      night && !storm ? 0.9 : 0,
+      starBlend
+    );
     World.stars.position.set(World.camTarget.x, 0, World.camTarget.z);
   },
 
   updateRain: (dt, active) => {
     World.rain.visible = active;
-    if (!active) return;
+    if (!active || dt <= 0) return;
     const pos = World.rain.geometry.attributes.position;
     const cam = World.camTarget;
     for (let i = 0; i < pos.count; i++) {

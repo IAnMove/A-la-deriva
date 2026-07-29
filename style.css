@@ -32,6 +32,7 @@ html, body {
   width: 100%;
   height: 100%;
   display: block;
+  touch-action: none;
 }
 
 .hidden { display: none !important; }
@@ -168,7 +169,10 @@ button.danger { background: linear-gradient(180deg, #ff7043, #d84315); color: #f
   border-radius: 12px;
   padding: 10px 14px;
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 14px;
+  max-width: calc(100vw - 20px);
 }
 .resource { display: flex; align-items: center; gap: 6px; font-size: 0.95rem; }
 .resource .icon { font-size: 1.1rem; }
@@ -197,6 +201,112 @@ button.danger { background: linear-gradient(180deg, #ff7043, #d84315); color: #f
   border: 1px solid var(--panel-border);
   border-radius: 12px;
   padding: 8px;
+}
+
+/* Mando táctil. Se activa desde Input solo en dispositivos con puntero grueso
+   o soporte táctil real; en escritorio no ocupa espacio ni captura eventos. */
+#mobile-controls { display: none; }
+
+.touch-controls #mobile-controls {
+  position: absolute;
+  right: 0;
+  bottom: max(6px, env(safe-area-inset-bottom));
+  left: 0;
+  z-index: 40;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  height: 158px;
+  padding: 0 10px 22px;
+  pointer-events: none;
+}
+
+#mobile-controls button {
+  min-width: 44px;
+  min-height: 44px;
+  margin: 2px;
+  padding: 6px;
+  border: 1px solid rgba(227, 242, 253, 0.45);
+  color: var(--text);
+  background: rgba(5, 25, 42, 0.82);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.38);
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  pointer-events: auto;
+}
+
+#mobile-controls button.is-held {
+  transform: translateY(1px) scale(0.96);
+  border-color: var(--accent);
+  background: rgba(2, 136, 209, 0.92);
+  filter: brightness(1.2);
+}
+
+.mobile-pad {
+  display: grid;
+  grid-template: repeat(3, 46px) / repeat(3, 46px);
+  grid-template-areas:
+    ". up ."
+    "left center right"
+    ". down .";
+  pointer-events: none;
+}
+
+#mobile-up { grid-area: up; }
+#mobile-left { grid-area: left; }
+#mobile-right { grid-area: right; }
+#mobile-down { grid-area: down; }
+.mobile-pad-center {
+  grid-area: center;
+  width: 30px;
+  height: 30px;
+  align-self: center;
+  justify-self: center;
+  border: 1px solid rgba(227, 242, 253, 0.24);
+  border-radius: 50%;
+  background: rgba(5, 25, 42, 0.5);
+}
+
+#mobile-actions {
+  width: 180px;
+  pointer-events: none;
+}
+
+.mobile-camera,
+.mobile-action-buttons {
+  display: flex;
+  justify-content: flex-end;
+  pointer-events: none;
+}
+
+.mobile-camera button {
+  min-width: 38px !important;
+  min-height: 36px !important;
+  font-size: 1.05rem;
+}
+
+.mobile-action-buttons button {
+  min-width: 52px !important;
+  font-size: 0.76rem;
+}
+
+#mobile-row {
+  border-color: rgba(255, 202, 40, 0.65) !important;
+  color: var(--warning) !important;
+}
+
+#mobile-touch-hint {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  width: 210px;
+  margin: 0 0 1px -105px;
+  color: rgba(227, 242, 253, 0.72);
+  font-size: 0.68rem;
+  line-height: 1.15;
+  text-align: center;
+  text-shadow: 0 1px 3px #000;
+  pointer-events: none;
 }
 
 #event-message {
@@ -478,9 +588,47 @@ button.danger { background: linear-gradient(180deg, #ff7043, #d84315); color: #f
   #fishing-track { height: 68px; }
   #fishing-marker { width: 38px; height: 38px; font-size: 1.35rem; }
   #btn-fishing-pull { min-height: 56px; }
+
+  .touch-controls #action-bar {
+    bottom: 166px;
+    gap: 2px;
+    padding: 4px;
+  }
+  .touch-controls #action-bar button {
+    min-height: 40px;
+    margin: 2px;
+    padding: 7px 9px;
+    font-size: 0.76rem;
+  }
+  .touch-controls #status-panel { display: none; }
+  .touch-controls #objective-panel {
+    top: 188px;
+    max-width: 172px;
+    padding: 7px 9px;
+  }
 }
 
 @media (max-width: 380px) {
   .fishing-status { flex-direction: column; gap: 4px; }
   #fishing-track { margin-top: 12px; }
+  .touch-controls #mobile-controls { padding-right: 5px; padding-left: 5px; }
+  .mobile-pad { grid-template: repeat(3, 43px) / repeat(3, 43px); }
+  #mobile-actions { width: 166px; }
+  .mobile-camera button { min-width: 35px !important; }
+  .mobile-action-buttons button { min-width: 48px !important; padding: 5px 3px; }
+}
+
+@media (max-height: 500px) and (orientation: landscape) {
+  .touch-controls #player-hud {
+    top: 58px;
+    width: 150px;
+    padding: 6px;
+  }
+  .touch-controls #resource-panel { top: 58px; }
+  .touch-controls #objective-panel,
+  .touch-controls #status-panel,
+  .touch-controls #action-bar,
+  .touch-controls #mobile-touch-hint { display: none; }
+  .touch-controls #mobile-controls { height: 142px; padding-bottom: 4px; }
+  .mobile-pad { grid-template: repeat(3, 42px) / repeat(3, 42px); }
 }

@@ -24,20 +24,20 @@ const BUILDINGS = {
   net: {
     key: 'net', name: 'Red de pesca', icon: '🕸️', category: 'basic',
     cost: { rope: 4, wood: 2 },
-    desc: 'Genera comida automáticamente.',
-    weight: 0.7, health: 35, provides: { autoFood: 0.3 }
+    desc: 'Captura 0,55 raciones de comida al día si está intacta.',
+    weight: 0.7, health: 35, provides: { autoFood: 0.55 }
   },
   rain: {
     key: 'rain', name: 'Recolector de lluvia', icon: '🌧️', category: 'basic',
     cost: { plastic: 3, cloth: 2 },
-    desc: 'Recoge agua cuando llueve.',
-    weight: 0.7, health: 30, provides: { rainWater: 0.4 }
+    desc: 'Recoge hasta 1,1 de agua por día mientras llueve.',
+    weight: 0.7, health: 30, provides: { rainWater: 1.1 }
   },
   crop: {
     key: 'crop', name: 'Pequeño cultivo', icon: '🌱', category: 'basic',
     cost: { wood: 2, cloth: 1 },
-    desc: 'Proporciona comida lentamente.',
-    weight: 0.5, health: 25, provides: { autoFood: 0.15 }
+    desc: 'Cultiva 0,3 raciones de comida al día si está intacto.',
+    weight: 0.5, health: 25, provides: { autoFood: 0.3 }
   },
   fire: {
     key: 'fire', name: 'Hoguera protegida', icon: '🔥', category: 'basic',
@@ -48,26 +48,26 @@ const BUILDINGS = {
   sail: {
     key: 'sail', name: 'Vela', icon: '⛵', category: 'basic',
     cost: { cloth: 5, wood: 4, rope: 3 },
-    desc: 'Permite influir en la deriva.',
+    desc: 'Da propulsión y permite navegar con un timón operativo.',
     weight: 1.0, health: 40, provides: { sail: 1 }
   },
   rudder: {
     key: 'rudder', name: 'Timón', icon: '⚓', category: 'basic',
     cost: { wood: 5, metal: 2, rope: 2 },
-    desc: 'Mejora el control de rumbo.',
+    desc: 'Fija el rumbo lateral y mejora la eficacia de vela y remo.',
     weight: 1.0, health: 45, provides: { rudder: 1 }
   },
   purifier: {
     key: 'purifier', name: 'Purificador de agua', icon: '💧', category: 'advanced',
     cost: { metal: 4, plastic: 3, wood: 3 },
-    desc: 'Genera agua potable del mar.',
+    desc: 'Purifica 0,8 de agua al día si está intacto.',
     weight: 1.2, health: 40, provides: { purifiedWater: 0.8 }
   },
   kitchen: {
     key: 'kitchen', name: 'Cocina', icon: '🍳', category: 'advanced',
     cost: { metal: 3, wood: 4, plastic: 2 },
-    desc: 'Cocina alimentos de forma eficiente.',
-    weight: 1.1, health: 45, provides: { cook: 2, autoFood: 0.2 }
+    desc: 'Cocina raciones con más recuperación; no crea comida.',
+    weight: 1.1, health: 45, provides: { cook: 2 }
   },
   medkit: {
     key: 'medkit', name: 'Botiquín', icon: '💊', category: 'advanced',
@@ -96,7 +96,7 @@ const BUILDINGS = {
   motor: {
     key: 'motor', name: 'Motor improvisado', icon: '⚡', category: 'advanced',
     cost: { metal: 8, plastic: 5, wood: 4 },
-    desc: 'Permite alcanzar una isla.',
+    desc: 'Acelera la ruta a una isla; convierte plástico en combustible.',
     weight: 2.0, health: 50, provides: { motor: 1 }
   },
 };
@@ -108,6 +108,7 @@ function mat(color, emissive = null) {
   if (!MatLib[key]) {
     const m = new THREE.MeshLambertMaterial({ color });
     if (emissive) m.emissive = new THREE.Color(emissive);
+    m.userData.sharedRaftMaterial = true;
     MatLib[key] = m;
   }
   return MatLib[key];
@@ -275,7 +276,15 @@ class Raft {
   disposeMesh(cell) {
     if (!cell.mesh) return;
     this.group.remove(cell.mesh);
-    cell.mesh.traverse(o => { if (o.geometry) o.geometry.dispose(); });
+    cell.mesh.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      const materials = Array.isArray(o.material) ? o.material : [o.material];
+      for (const material of materials) {
+        if (material?.dispose && !material.userData?.sharedRaftMaterial) {
+          material.dispose();
+        }
+      }
+    });
     cell.mesh = null;
   }
 
@@ -431,11 +440,23 @@ class Raft {
     return Math.max(4, this.totalArea() * 2.5 + this.countProvides('storage'));
   }
 
+  cellEfficiency(cell) {
+    if (!cell || cell.health <= 0) return 0;
+    const building = BUILDINGS[cell.buildingKey];
+    if (!building) return 0;
+    const maxHealth = Math.max(1, Number(cell.maxHealth) || building.health);
+    return Util.clamp(cell.health / maxHealth, 0, 1);
+  }
+
+  isOperational(cell) {
+    return this.cellEfficiency(cell) > 0;
+  }
+
   countProvides(key) {
     let n = 0;
     for (const v of this.grid.values()) {
       const p = BUILDINGS[v.buildingKey].provides;
-      if (p && p[key]) n += p[key];
+      if (p && p[key]) n += p[key] * this.cellEfficiency(v);
     }
     return n;
   }
@@ -471,7 +492,10 @@ class Raft {
     if (base) {
       if (pct < 0.7) {
         const f = pct < 0.3 ? 0.45 : 0.7;
-        base.material = new THREE.MeshLambertMaterial({ color: new THREE.Color(0x8d6e63).multiplyScalar(f) });
+        const damagedColor = new THREE.Color(0x8d6e63)
+          .multiplyScalar(f)
+          .getHex();
+        base.material = mat(damagedColor);
       } else {
         base.material = mat(0x8d6e63);
       }

@@ -79,10 +79,14 @@ function test(name, fn) {
 load('engine.js');
 load('raft.js');
 load('survivor.js');
+load('game-simulation.js');
+load('game-ui.js');
+load('game-renderer.js');
 run(`
   var World = { scene: {}, mouseToWorld: () => ({ x: 0, z: 0 }) };
   var EntityManager = { objects: [], dangers: [], fishBanks: [], scene: {}, reset() {}, update() {} };
   var HookVis = { hide() {}, show() {} };
+  var PlayerVis = { sync() {}, updateAim() {} };
   var AudioSys = { play() {}, isEnabled: () => true, setEnabled() {} };
   var Save = {
     saveCalls: 0,
@@ -105,6 +109,59 @@ run(`
   Game.closeAllModals();
 `);
 
+test('Game delega simulación e interfaz en módulos independientes', () => {
+  const gameSource = fs.readFileSync(path.join(root, 'game.js'), 'utf8');
+  assert.equal(run('typeof GameSimulation.update'), 'function');
+  assert.equal(run('typeof GameSimulation.resolveDailySupplies'), 'function');
+  assert.equal(run('typeof GameUI.updateUI'), 'function');
+  assert.equal(run('typeof GameUI.showDaySummary'), 'function');
+  assert.equal(run('typeof GameRenderer.draw'), 'function');
+  assert.match(gameSource, /update: \(dt\) => GameSimulation\.update\(Game, dt\)/);
+  assert.match(gameSource, /updateUI: \(\) => GameUI\.updateUI\(Game\)/);
+  assert.doesNotMatch(gameSource, /const SURVIVAL_BALANCE/);
+  assert.doesNotMatch(gameSource, /const NAVIGATION_BALANCE/);
+
+  run(`
+    Game.state = 'playing';
+    Game.resources.fuel = 1.5;
+    Game.navigationHeading = -0.4;
+    Game.victoryCondition = null;
+    GameUI.updateUI(Game);
+  `);
+  assert.equal(elements.get('res-fuel').textContent, '1.5');
+  assert.match(elements.get('navigation-status').textContent, /Rumbo: babor/);
+  assert.match(elements.get('navigation-status').textContent, /Combustible: 1\.5/);
+});
+
+test('el render separa reloj visual y congela el océano al pausar', () => {
+  run(`
+    var rendererSeaTimesFixture = [];
+    var rendererRainDtsFixture = [];
+    World.waveHeight = () => 0;
+    World.updateCamera = () => {};
+    World.updateSea = time => rendererSeaTimesFixture.push(time);
+    World.updateDayNight = () => {};
+    World.updateRain = dt => rendererRainDtsFixture.push(dt);
+    World.render = () => {};
+    CrewManager.syncMeshes = () => {};
+    Game.raft.group = null;
+    Game.elapsed = 5;
+    Game.state = 'playing';
+    Game.paused = true;
+    Game.fishing = { active: false };
+    GameRenderer.draw(Game, 0.5);
+    var pausedElapsedFixture = Game.elapsed;
+    Game.paused = false;
+    GameRenderer.draw(Game, 0.5);
+  `);
+  assert.equal(run('pausedElapsedFixture'), 5);
+  assert.equal(run('rendererSeaTimesFixture[0]'), 5);
+  assert.equal(run('rendererRainDtsFixture[0]'), 0);
+  assert.equal(run('Game.elapsed'), 5.5);
+  assert.equal(run('rendererSeaTimesFixture[1]'), 5.5);
+  assert.equal(run('rendererRainDtsFixture[1]'), 0.5);
+});
+
 function resetRaft(entries) {
   run('Game.raft.grid.clear();');
   for (const [key, buildingKey, health] of entries) {
@@ -120,13 +177,13 @@ function resetRaft(entries) {
 test('economía, producción y recogida fraccionaria', () => {
   resetRaft([['0,0', 'net', 35]]);
   run('Game.resources.food = 0; Game.resources.water = 0; Game.rain = false; Game.updateProduction(10);');
-  assert.equal(run('Game.resources.food'), 0.06);
+  assert.ok(Math.abs(run('Game.resources.food') - 0.55 * 10 / 240) < 1e-9);
 
   resetRaft([['0,0', 'rain', 30], ['1,0', 'purifier', 40]]);
   run('Game.resources.water = 0; Game.rain = false; Game.updateProduction(10);');
-  assert.equal(run('Game.resources.water'), 0.12);
+  assert.ok(Math.abs(run('Game.resources.water') - 0.8 * 10 / 240) < 1e-9);
   run('Game.rain = true; Game.updateProduction(10);');
-  assert.equal(run('Game.resources.water'), 0.44);
+  assert.ok(Math.abs(run('Game.resources.water') - (0.8 + 0.8 + 1.1) * 10 / 240) < 1e-9);
 
   run(`
     CrewManager.members = [];
@@ -156,7 +213,9 @@ test('acciones especiales sin exploits y reparaciones completas', () => {
     Game.resources.food = 1; Game.raft.selected = null; Game.interact();
   `);
   assert.equal(run('Game.resources.food'), 0);
-  assert.equal(run('Game.player.hunger'), 60);
+  assert.equal(run('Game.player.hunger'), 48);
+  assert.equal(run('Game.player.foodCredit'), 0.8);
+  run('Game.player.foodCredit = 0;');
 
   resetRaft([['0,0', 'medkit', 30]]);
   run('Game.player.health = 40; Game.resources.cloth = 1; Game.interact();');
@@ -202,6 +261,126 @@ test('conectividad, destrucción y colisiones de la balsa', () => {
     JSON.parse(JSON.stringify(run('Game.raft.getBounds()'))),
     { minX: 3, maxX: 4, minY: 4, maxY: 4 }
   );
+});
+
+test('el daño reduce prestaciones y a cero las desactiva', () => {
+  resetRaft([['0,0', 'net', 35], ['1,0', 'purifier', 40], ['2,0', 'storage', 40]]);
+  run(`
+    Game.raft.get(0, 0).maxHealth = 35;
+    Game.raft.get(0, 0).health = 17.5;
+    Game.raft.get(1, 0).maxHealth = 40;
+    Game.raft.get(1, 0).health = 0;
+    Game.raft.get(2, 0).maxHealth = 40;
+    Game.raft.get(2, 0).health = 20;
+  `);
+  assert.ok(Math.abs(run("Game.raft.countProvides('autoFood')") - 0.275) < 1e-9);
+  assert.equal(run("Game.raft.countProvides('purifiedWater')"), 0);
+  assert.equal(run("Game.raft.countProvides('storage')"), 5);
+  assert.equal(run('Game.raft.isOperational(Game.raft.get(1, 0))'), false);
+
+  run('Game.resources.food = 0; Game.resources.water = 0; Game.rain = false; Game.updateProduction(240);');
+  assert.ok(Math.abs(run('Game.resources.food') - 0.275) < 1e-9);
+  assert.equal(run('Game.resources.water'), 0);
+});
+
+test('hambre y sed representan reservas y la automatización no cubre una persona', () => {
+  resetRaft([['0,0', 'net', 35], ['1,0', 'purifier', 40]]);
+  run(`
+    CrewManager.members = [];
+    Game.resources = { wood: 0, plastic: 0, cloth: 0, metal: 0, rope: 0, food: 0.55, water: 0.8, fuel: 0 };
+    Object.assign(Game.player, { health: 100, hunger: 90, thirst: 90, morale: 75 });
+    var partialSupplyFixture = Game.resolveDailySupplies();
+    var partialHungerFixture = Game.player.hunger;
+    var partialThirstFixture = Game.player.thirst;
+
+    Game.resources.food = 1;
+    Game.resources.water = 1.3;
+    var fullSupplyFixture = Game.resolveDailySupplies();
+  `);
+  assert.equal(run('partialSupplyFixture.foodRatio'), 0.55);
+  assert.ok(Math.abs(run('partialSupplyFixture.waterRatio') - 0.8 / 1.3) < 1e-9);
+  assert.ok(run('partialHungerFixture') < 90);
+  assert.ok(run('partialThirstFixture') < 90);
+  assert.equal(run('fullSupplyFixture.foodConsumed'), 1);
+  assert.equal(run('fullSupplyFixture.waterConsumed'), 1.3);
+  assert.ok(run('Game.player.hunger') > run('partialHungerFixture'));
+  assert.ok(run('Game.player.thirst') > run('partialThirstFixture'));
+
+  resetRaft([['0,0', 'kitchen', 45]]);
+  run(`
+    CrewManager.members = [];
+    Game.raft.selected = null;
+    Game.player.x = 1; Game.player.z = 1;
+    Game.player.hunger = 50;
+    Game.player.foodCredit = 0;
+    Game.resources.food = 1;
+    Game.resources.water = 1.3;
+    Game.interact();
+    var cookedHungerFixture = Game.player.hunger;
+    var cookedSupplyFixture = Game.resolveDailySupplies();
+  `);
+  assert.equal(run('cookedSupplyFixture.foodConsumed'), 0);
+  assert.equal(run('cookedSupplyFixture.foodRatio'), 1);
+  assert.equal(run('Game.resources.food'), 0);
+  assert.ok(run('Game.player.hunger') > run('cookedHungerFixture'));
+  assert.equal(run('Game.player.foodCredit'), 0);
+});
+
+test('timón, remo y combustible alteran la navegación', () => {
+  resetRaft([['0,0', 'motor', 50], ['1,0', 'sail', 40], ['0,1', 'rudder', 45]]);
+  run(`
+    CrewManager.members = [];
+    Game.resources = { wood: 0, plastic: 1, cloth: 0, metal: 0, rope: 0, food: 0, water: 0, fuel: 0 };
+    var refueledFixture = Game.refuelMotor();
+    Game.worldOffset = 0;
+    Game.victoryCondition = null;
+    Game.updateEntities(1);
+    var passiveMotorOffsetFixture = Game.worldOffset;
+    Game.worldOffset = 0;
+    Game.victoryCondition = 'island';
+    Game.updateEntities(1);
+    var poweredMotorOffsetFixture = Game.worldOffset;
+    Game.islandDistance = 300;
+    var navigationDayFixture = Game.resolveNavigationDay();
+
+    Game.player.stamina = 100;
+    Game.player.hunger = 90;
+    Game.player.thirst = 90;
+    Game.player.rowTarget = { pushX: 0, pushZ: 1 };
+    Game.rowingCooldown = 0;
+    Game.navigationHeading = 0;
+    var distanceBeforeRowFixture = Game.islandDistance;
+    Game.row();
+    var rowDistanceFixture = distanceBeforeRowFixture - Game.islandDistance;
+
+    Game.raft.get(0, 1).health = 22.5;
+    Game.resources.fuel = 0.5;
+    Game.islandDistance = 300;
+    var damagedRudderDayFixture = Game.resolveNavigationDay();
+
+    Game.raft.get(0, 1).health = 0;
+    Game.resources.fuel = 0.5;
+    Game.islandDistance = 300;
+    var brokenRudderDayFixture = Game.resolveNavigationDay();
+
+    Game.raft.get(0, 1).health = 45;
+    Game.raft.get(0, 0).health = 0;
+    Game.resources.fuel = 0.5;
+    Game.islandDistance = 300;
+    var brokenMotorDayFixture = Game.resolveNavigationDay();
+  `);
+  assert.equal(run('refueledFixture'), true);
+  assert.equal(run('Game.resources.plastic'), 0);
+  assert.ok(run('poweredMotorOffsetFixture') > run('passiveMotorOffsetFixture'));
+  assert.equal(run('navigationDayFixture.fuelConsumed'), 0.5);
+  assert.equal(run('navigationDayFixture.moved'), 30);
+  assert.equal(run('rowDistanceFixture'), 4);
+  assert.equal(run('Game.navigationHeading'), 0.5);
+  assert.ok(Math.abs(run('damagedRudderDayFixture.moved') - 20.25) < 1e-9);
+  assert.equal(run('brokenRudderDayFixture.moved'), 0);
+  assert.equal(run('brokenRudderDayFixture.fuelConsumed'), 0);
+  assert.equal(run('brokenMotorDayFixture.moved'), 12);
+  assert.equal(run('brokenMotorDayFixture.fuelConsumed'), 0);
 });
 
 test('clima, controles, pausa y menús', () => {
@@ -273,8 +452,9 @@ test('guardados inválidos se sanean', () => {
   run(`
     Game.loadFromSave({
       day: 'incorrecto', time: 99, zone: 'zona-inexistente',
-      player: { x: 'NaN', health: -20 },
-      resources: { wood: -4, water: '2.5' },
+      player: { x: 'NaN', health: -20, foodCredit: 99 },
+      resources: { wood: -4, water: '2.5', fuel: -8 },
+      navigationHeading: 99,
       raftGrid: [
         ['0,0', { buildingKey: 'floor', health: 25 }],
         ['4,0', { buildingKey: 'radio', health: 999 }]
@@ -285,7 +465,10 @@ test('guardados inválidos se sanean', () => {
   assert.equal(run('Game.day'), 1);
   assert.equal(run('Game.time'), 23.99);
   assert.equal(run('Game.player.x'), 1);
+  assert.equal(run('Game.player.foodCredit'), 1);
   assert.equal(run('Game.resources.wood'), 0);
+  assert.equal(run('Game.resources.fuel'), 0);
+  assert.equal(run('Game.navigationHeading'), 1);
   assert.equal(run('Game.raft.grid.size'), 1);
 });
 
@@ -402,7 +585,7 @@ test('supervivencia diaria, recuperación y autoguardado', () => {
   run(`
     CrewManager.members = [];
     Game.resources = { wood: 0, plastic: 0, cloth: 0, metal: 0, rope: 0, food: 0, water: 0 };
-    Object.assign(Game.player, { health: 100, hunger: 90, thirst: 90, morale: 75, sanity: 100 });
+    Object.assign(Game.player, { health: 100, hunger: 90, thirst: 90, morale: 75, sanity: 100, foodCredit: 0 });
     Game.day = 1; Game.zone = 'debris'; Game.storm = false; Game.state = 'playing';
     var dailyEventsFixture = Game.pickDailyEvents;
     var dailySummaryFixture = Game.showDaySummary;
@@ -410,10 +593,14 @@ test('supervivencia diaria, recuperación y autoguardado', () => {
     Game.showDaySummary = () => {};
     var savesBeforeFixture = Save.saveCalls;
     Game.updateProduction(240);
+    var producedFoodFixture = Game.resources.food;
+    var producedWaterFixture = Game.resources.water;
     Game.endDay();
   `);
-  assert.ok(Math.abs(run('Game.resources.food') - 0.44) < 1e-9);
-  assert.ok(Math.abs(run('Game.resources.water') - 1.58) < 1e-9);
+  assert.ok(Math.abs(run('producedFoodFixture') - 0.55) < 1e-9);
+  assert.ok(Math.abs(run('producedWaterFixture') - 0.8) < 1e-9);
+  assert.equal(run('Game.resources.food'), 0);
+  assert.equal(run('Game.resources.water'), 0);
   assert.equal(run('Save.saveCalls'), run('savesBeforeFixture + 1'));
 
   resetRaft([['0,0', 'bed', 30], ['1,0', 'floor', 50]]);
@@ -462,11 +649,11 @@ test('eventos y rutas finales son alcanzables', () => {
     Object.assign(Game.player, { health: 100, hunger: 90, thirst: 90, morale: 75, sanity: 100 });
     var islandDaysFixture = 0;
     while (Game.state === 'playing' && islandDaysFixture < 20) {
-      Game.resources = { wood: 0, plastic: 0, cloth: 0, metal: 0, rope: 0, food: 1, water: 1.3 };
+      Game.resources = { wood: 0, plastic: 0, cloth: 0, metal: 0, rope: 0, food: 1, water: 1.3, fuel: 0.5 };
       Game.endDay(); islandDaysFixture++;
     }
   `);
-  assert.equal(run('islandDaysFixture'), 12);
+  assert.equal(run('islandDaysFixture'), 10);
 
   resetRaft([['0,0', 'radio', 35]]);
   run(`

@@ -386,7 +386,14 @@ const CrewManager = {
   },
 
   removeMesh: (m) => {
-    if (m.mesh && m.mesh.parent) m.mesh.parent.remove(m.mesh);
+    if (m.mesh) {
+      if (m.mesh.parent) m.mesh.parent.remove(m.mesh);
+      // Las figuras de tripulación usan materiales compartidos (MatLib), pero
+      // sus geometrías eran únicas y quedaban vivas tras morir/cargar partida.
+      m.mesh.traverse(o => {
+        if (o.geometry && o.geometry.dispose) o.geometry.dispose();
+      });
+    }
     m.mesh = null;
   },
 

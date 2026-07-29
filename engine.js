@@ -27,7 +27,8 @@ const Util = {
     metal: 'metal',
     rope: 'cuerda',
     food: 'comida',
-    water: 'agua'
+    water: 'agua',
+    fuel: 'combustible'
   })[key] || key,
   pad: (s, n = 2) => String(s).padStart(n, '0'),
 };
@@ -40,7 +41,14 @@ const Input = {
   keys: {},
   held: {},
   mouse: { x: 0, y: 0, down: false, clicked: false, rightClicked: false },
+  virtualPulses: new Set(),
+  touchPointer: null,
+  initialized: false,
   init: (canvas) => {
+    if (Input.initialized) return;
+    Input.initialized = true;
+    Input.mouse.x = canvas.clientWidth / 2;
+    Input.mouse.y = canvas.clientHeight / 2;
     window.addEventListener('keydown', e => {
       const interactive = e.target && (
         e.target.tagName === 'BUTTON' ||
@@ -66,7 +74,12 @@ const Input = {
     const releaseAll = () => {
       Input.keys = {};
       Input.held = {};
+      Input.virtualPulses.clear();
+      Input.touchPointer = null;
       Input.mouse.down = false;
+      document.querySelectorAll('[data-input-hold].is-held').forEach(
+        button => button.classList.remove('is-held')
+      );
     };
     window.addEventListener('blur', releaseAll);
     document.addEventListener('visibilitychange', () => {
@@ -85,6 +98,127 @@ const Input = {
       e.preventDefault();
       Input.mouse.rightClicked = true;
     });
+
+    // Un toque corto sobre el mar equivale al clic principal existente:
+    // apunta/lanzar gancho, caminar, construir o remar según el contexto.
+    // Los desplazamientos sirven para apuntar sin activar una acción accidental.
+    canvas.addEventListener('pointerdown', e => {
+      if (e.pointerType !== 'touch' || Input.touchPointer) return;
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      Input.mouse.x = e.clientX - rect.left;
+      Input.mouse.y = e.clientY - rect.top;
+      Input.mouse.down = true;
+      Input.touchPointer = {
+        id: e.pointerId,
+        startX: e.clientX,
+        startY: e.clientY,
+        startedAt: Number.isFinite(e.timeStamp) ? e.timeStamp : performance.now(),
+        moved: false
+      };
+      Input.capturePointer(canvas, e.pointerId);
+    }, { passive: false });
+    canvas.addEventListener('pointermove', e => {
+      if (e.pointerType !== 'touch' || Input.touchPointer?.id !== e.pointerId) return;
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      Input.mouse.x = e.clientX - rect.left;
+      Input.mouse.y = e.clientY - rect.top;
+      if (Math.hypot(e.clientX - Input.touchPointer.startX, e.clientY - Input.touchPointer.startY) > 12) {
+        Input.touchPointer.moved = true;
+      }
+    }, { passive: false });
+    const finishTouch = e => {
+      if (e.pointerType !== 'touch' || Input.touchPointer?.id !== e.pointerId) return;
+      e.preventDefault();
+      Input.mouse.down = false;
+      if (!Input.touchPointer.moved && e.type === 'pointerup') {
+        const endedAt = Number.isFinite(e.timeStamp) ? e.timeStamp : performance.now();
+        if (endedAt - Input.touchPointer.startedAt >= 500) Input.mouse.rightClicked = true;
+        else Input.mouse.clicked = true;
+      }
+      Input.touchPointer = null;
+    };
+    canvas.addEventListener('pointerup', finishTouch, { passive: false });
+    canvas.addEventListener('pointercancel', finishTouch, { passive: false });
+
+    Input.initVirtualControls(canvas);
+  },
+  setVirtualHeld: (code, down) => {
+    if (!code) return;
+    Input.held[code] = down;
+    Input.keys[code] = down;
+  },
+  pulse: (code) => {
+    if (!code) return;
+    Input.keys[code] = true;
+    Input.virtualPulses.add(code);
+  },
+  capturePointer: (target, pointerId) => {
+    if (!target?.setPointerCapture) return;
+    try { target.setPointerCapture(pointerId); }
+    catch (_) {
+      // Los eventos sintéticos de pruebas y algunos navegadores híbridos no
+      // registran el puntero como activo; el control sigue funcionando.
+    }
+  },
+  initVirtualControls: (canvas) => {
+    const touchCapable = (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches) ||
+      (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0);
+    document.documentElement.classList.toggle('touch-controls', touchCapable);
+
+    const releaseButton = button => {
+      const code = button.dataset.inputHold;
+      if (code) Input.setVirtualHeld(code, false);
+      button.classList.remove('is-held');
+    };
+
+    document.querySelectorAll('[data-input-hold]').forEach(button => {
+      button.addEventListener('pointerdown', e => {
+        e.preventDefault();
+        Input.setVirtualHeld(button.dataset.inputHold, true);
+        button.classList.add('is-held');
+        Input.capturePointer(button, e.pointerId);
+      });
+      button.addEventListener('pointerup', e => {
+        e.preventDefault();
+        releaseButton(button);
+      });
+      button.addEventListener('pointercancel', () => releaseButton(button));
+      button.addEventListener('lostpointercapture', () => releaseButton(button));
+    });
+
+    document.querySelectorAll('[data-input-press]').forEach(button => {
+      button.addEventListener('pointerdown', e => {
+        e.preventDefault();
+        Input.pulse(button.dataset.inputPress);
+        button.classList.add('is-held');
+      });
+      const release = () => button.classList.remove('is-held');
+      button.addEventListener('pointerup', release);
+      button.addEventListener('pointercancel', release);
+      button.addEventListener('lostpointercapture', release);
+    });
+
+    document.querySelectorAll('[data-input-wheel]').forEach(button => {
+      button.addEventListener('pointerdown', e => {
+        e.preventDefault();
+        const deltaY = Number(button.dataset.inputWheel) || 0;
+        let wheelEvent;
+        try {
+          wheelEvent = new WheelEvent('wheel', { deltaY, bubbles: true, cancelable: true });
+        } catch (_) {
+          wheelEvent = new Event('wheel', { bubbles: true, cancelable: true });
+          Object.defineProperty(wheelEvent, 'deltaY', { value: deltaY });
+        }
+        canvas.dispatchEvent(wheelEvent);
+        button.classList.add('is-held');
+      });
+      const release = () => button.classList.remove('is-held');
+      button.addEventListener('pointerup', release);
+      button.addEventListener('pointercancel', release);
+      button.addEventListener('lostpointercapture', release);
+    });
   },
   isDown: (code) => !!Input.held[code] || !!Input.keys[code],
   wasPressed: (code) => {
@@ -95,6 +229,8 @@ const Input = {
   resetClick: () => { Input.mouse.clicked = false; Input.mouse.rightClicked = false; },
   clearFrame: () => {
     for (const k in Input.keys) if (Input.keys[k] === 'pressed') Input.keys[k] = false;
+    for (const code of Input.virtualPulses) Input.keys[code] = false;
+    Input.virtualPulses.clear();
   }
 };
 

@@ -24,17 +24,20 @@
           <li><strong>Shift</strong>: remar con las manos desde donde estás</li>
           <li><strong>E</strong>: interactuar / desmontar celda seleccionada</li>
           <li><strong>Pesca</strong>: al enganchar un pez se abre el minijuego; pulsa Espacio o haz clic para tirar</li>
+          <li><strong>Timón</strong>: úsalo con E para alternar rumbo; remar lateralmente también lo corrige</li>
+          <li><strong>Motor</strong>: usa E para transformar 1 plástico en 2 de combustible</li>
           <li><strong>B</strong>: abrir menú de construcción</li>
           <li><strong>Escape</strong>: cancelar colocación / cerrar menús</li>
           <li><strong>Espacio</strong>: pausar</li>
           <li><strong>M</strong>: silenciar/activar sonido</li>
+          <li><strong>Móvil</strong>: usa el mando táctil; toca el mar para actuar y mantenlo para seleccionar</li>
         </ul>
       </div>
       <div class="start-buttons">
         <button id="btn-new-game">Nueva partida</button>
         <button id="btn-continue">Continuar</button>
       </div>
-      <p class="version">v1.4 · Cámara, historias y minijuego de pesca</p>
+      <p class="version">v1.5 · Navegación, móvil y simulación optimizada</p>
     </div>
   </div>
 
@@ -103,6 +106,7 @@
       <div class="resource" title="Tela"><span class="icon">🧵</span><span id="res-cloth">0</span></div>
       <div class="resource" title="Metal"><span class="icon">⚙️</span><span id="res-metal">0</span></div>
       <div class="resource" title="Cuerda"><span class="icon">🪢</span><span id="res-rope">0</span></div>
+      <div class="resource" title="Combustible"><span class="icon">⛽</span><span id="res-fuel">0</span></div>
     </div>
 
     <!-- Objetivo -->
@@ -115,6 +119,7 @@
       <div>Consumo/día: <span id="daily-food">1</span> 🍖 / <span id="daily-water">1.3</span> 💧</div>
       <div>Estructura: <span id="structural-health">100%</span></div>
       <div>Remo: <span id="rowing-status">listo</span></div>
+      <div>Navegación: <span id="navigation-status">a la deriva</span></div>
     </div>
 
     <!-- Botones de acción -->
@@ -122,6 +127,31 @@
       <button id="btn-build">Construir (B)</button>
       <button id="btn-crew">Tripulación</button>
       <button id="btn-log">Registro</button>
+    </div>
+
+    <!-- Controles táctiles; Input traduce estos botones a las teclas existentes -->
+    <div id="mobile-controls" aria-label="Controles táctiles">
+      <div id="mobile-move" class="mobile-pad" aria-label="Movimiento">
+        <button id="mobile-up" type="button" data-input-hold="KeyW" aria-label="Mover arriba">▲</button>
+        <button id="mobile-left" type="button" data-input-hold="KeyA" aria-label="Mover a la izquierda">◀</button>
+        <span class="mobile-pad-center" aria-hidden="true"></span>
+        <button id="mobile-right" type="button" data-input-hold="KeyD" aria-label="Mover a la derecha">▶</button>
+        <button id="mobile-down" type="button" data-input-hold="KeyS" aria-label="Mover abajo">▼</button>
+      </div>
+      <div id="mobile-actions" aria-label="Acciones">
+        <div class="mobile-camera" aria-label="Cámara">
+          <button id="mobile-turn-left" type="button" data-input-hold="KeyQ" aria-label="Girar cámara a la izquierda">↶</button>
+          <button id="mobile-zoom-in" type="button" data-input-wheel="-120" aria-label="Acercar cámara">＋</button>
+          <button id="mobile-zoom-out" type="button" data-input-wheel="120" aria-label="Alejar cámara">−</button>
+          <button id="mobile-turn-right" type="button" data-input-hold="KeyR" aria-label="Girar cámara a la derecha">↷</button>
+        </div>
+        <div class="mobile-action-buttons">
+          <button id="mobile-interact" type="button" data-input-press="KeyE">Usar</button>
+          <button id="mobile-row" type="button" data-input-hold="ShiftLeft">Remar</button>
+          <button id="mobile-build" type="button" data-input-press="KeyB">Construir</button>
+        </div>
+      </div>
+      <p id="mobile-touch-hint">Toca para actuar · mantén para seleccionar</p>
     </div>
 
     <!-- Mensajes de evento central -->
@@ -204,8 +234,13 @@
     </div>
   </div>
 
-  <!-- Three.js (build UMD para funcionar desde file://) -->
-  <script src="https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js"></script>
+  <!-- Three.js local para jugar sin conexión; CDN fijada y con SRI como respaldo. -->
+  <script src="vendor/three.min.js"></script>
+  <script>
+    if (typeof THREE === 'undefined') {
+      document.write('<script src="https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js" integrity="sha384-RRHfJ6w1mTlKUBMYT/hvnRiOzEB/vyRV3DrQOseb6oYfvaZSfdd0byS4bHps0k2R" crossorigin="anonymous"><\/script>');
+    }
+  </script>
   <!-- Scripts del juego -->
   <script src="engine.js"></script>
   <script src="audio.js"></script>
@@ -216,6 +251,9 @@
   <script src="entities.js"></script>
   <script src="player.js"></script>
   <script src="hook.js"></script>
+  <script src="game-simulation.js"></script>
+  <script src="game-ui.js"></script>
+  <script src="game-renderer.js"></script>
   <script src="game.js"></script>
   <script src="main.js"></script>
 </body>

@@ -88,6 +88,25 @@ function buildFloatingMesh(typeKey, size) {
   return g;
 }
 
+// Los objetos aparecen y desaparecen continuamente. Clonar una plantilla
+// conserva geometrías y materiales en GPU, en lugar de crear y borrar buffers
+// nuevos por cada tabla, botella o caja.
+const FloatingMeshTemplates = Object.create(null);
+
+function makeFloatingMesh(typeKey, size) {
+  if (!FloatingMeshTemplates[typeKey]) {
+    const template = buildFloatingMesh(typeKey, size);
+    // La figura del náufrago guarda referencias articuladas en userData que
+    // no son necesarias para un modelo flotante y dificultan el clonado.
+    template.traverse(o => {
+      if (o.userData?.parts) delete o.userData.parts;
+      if (o.geometry || o.material) o.userData.sharedEntityResource = true;
+    });
+    FloatingMeshTemplates[typeKey] = template;
+  }
+  return FloatingMeshTemplates[typeKey].clone(true);
+}
+
 class FloatingObject {
   constructor(x, z, typeKey, scene) {
     this.x = x;
@@ -104,7 +123,7 @@ class FloatingObject {
     this.marked = false;
     this.collected = false;
     this.pendingDecision = false;
-    this.mesh = buildFloatingMesh(typeKey, def.size);
+    this.mesh = makeFloatingMesh(typeKey, def.size);
     this.mesh.position.set(x, 0, z);
     this.mesh.rotation.y = Math.random() * Math.PI * 2;
     scene.add(this.mesh);
@@ -124,8 +143,27 @@ class FloatingObject {
 
   dispose(scene) {
     scene.remove(this.mesh);
-    this.mesh.traverse(o => { if (o.geometry) o.geometry.dispose(); });
   }
+}
+
+let DangerMeshTemplate = null;
+
+function makeDangerMesh() {
+  if (!DangerMeshTemplate) {
+    DangerMeshTemplate = new THREE.Group();
+    const fin = new THREE.Mesh(new THREE.ConeGeometry(0.35, 0.9, 4), mat(0x455a64));
+    fin.scale.z = 0.35;
+    fin.position.y = 0.35;
+    DangerMeshTemplate.add(fin);
+    const body = new THREE.Mesh(new THREE.SphereGeometry(0.5, 6, 5), mat(0x546e7a));
+    body.scale.set(1.6, 0.4, 0.8);
+    body.position.y = 0.05;
+    DangerMeshTemplate.add(body);
+    DangerMeshTemplate.traverse(o => {
+      if (o.geometry || o.material) o.userData.sharedEntityResource = true;
+    });
+  }
+  return DangerMeshTemplate.clone(true);
 }
 
 class Danger {
@@ -139,15 +177,7 @@ class Danger {
     this.life = 30;
     this.active = true;
     // Aleta de tiburón
-    this.mesh = new THREE.Group();
-    const fin = new THREE.Mesh(new THREE.ConeGeometry(0.35, 0.9, 4), mat(0x455a64));
-    fin.scale.z = 0.35;
-    fin.position.y = 0.35;
-    this.mesh.add(fin);
-    const body = new THREE.Mesh(new THREE.SphereGeometry(0.5, 6, 5), mat(0x546e7a));
-    body.scale.set(1.6, 0.4, 0.8);
-    body.position.y = 0.05;
-    this.mesh.add(body);
+    this.mesh = makeDangerMesh();
     this.mesh.position.set(x, 0, z);
     scene.add(this.mesh);
   }
@@ -165,7 +195,6 @@ class Danger {
 
   dispose(scene) {
     scene.remove(this.mesh);
-    this.mesh.traverse(o => { if (o.geometry) o.geometry.dispose(); });
   }
 }
 
