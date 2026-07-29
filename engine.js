@@ -38,13 +38,40 @@ const WORLD_SCALE = 0.05; // 40 px = 2 unidades (1 celda)
 // Input
 const Input = {
   keys: {},
+  held: {},
   mouse: { x: 0, y: 0, down: false, clicked: false, rightClicked: false },
   init: (canvas) => {
     window.addEventListener('keydown', e => {
+      const interactive = e.target && (
+        e.target.tagName === 'BUTTON' ||
+        e.target.tagName === 'INPUT' ||
+        e.target.tagName === 'SELECT' ||
+        e.target.tagName === 'TEXTAREA'
+      );
+      if (interactive && (e.code === 'Space' || e.code === 'Enter')) return;
+      // Las acciones discretas (pausa, construir, sonido...) solo deben
+      // dispararse una vez por pulsación física, no con el auto-repeat.
+      if (Input.held[e.code]) {
+        if (e.code === 'Space' || e.code === 'KeyB' || e.code === 'KeyE') e.preventDefault();
+        return;
+      }
+      Input.held[e.code] = true;
       Input.keys[e.code] = true;
       if (e.code === 'Space' || e.code === 'KeyB' || e.code === 'KeyE') e.preventDefault();
     });
-    window.addEventListener('keyup', e => Input.keys[e.code] = false);
+    window.addEventListener('keyup', e => {
+      Input.held[e.code] = false;
+      Input.keys[e.code] = false;
+    });
+    const releaseAll = () => {
+      Input.keys = {};
+      Input.held = {};
+      Input.mouse.down = false;
+    };
+    window.addEventListener('blur', releaseAll);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) releaseAll();
+    });
     canvas.addEventListener('mousemove', e => {
       const rect = canvas.getBoundingClientRect();
       Input.mouse.x = e.clientX - rect.left;
@@ -59,7 +86,7 @@ const Input = {
       Input.mouse.rightClicked = true;
     });
   },
-  isDown: (code) => !!Input.keys[code],
+  isDown: (code) => !!Input.held[code] || !!Input.keys[code],
   wasPressed: (code) => {
     if (Input.keys[code] === 'pressed') return false;
     if (Input.keys[code]) { Input.keys[code] = 'pressed'; return true; }

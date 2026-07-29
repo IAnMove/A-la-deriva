@@ -196,6 +196,12 @@ test('conectividad, destrucción y colisiones de la balsa', () => {
   resetRaft([['0,0', 'floor', 50], ['2,0', 'floor', 50]]);
   assert.equal(run('Game.raft.intersectsCircle(1, 1, 0)'), true);
   assert.equal(run('Game.raft.intersectsCircle(3, 1, 0)'), false);
+
+  resetRaft([['3,4', 'floor', 50], ['4,4', 'floor', 50]]);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(run('Game.raft.getBounds()'))),
+    { minX: 3, maxX: 4, minY: 4, maxY: 4 }
+  );
 });
 
 test('clima, controles, pausa y menús', () => {
@@ -283,6 +289,54 @@ test('guardados inválidos se sanean', () => {
   assert.equal(run('Game.raft.grid.size'), 1);
 });
 
+test('historias de náufragos aportan valor y riesgo persistente', () => {
+  run(`
+    var riskyStoryFixture = new Survivor();
+    riskyStoryFixture.name = 'Náufrago de prueba';
+    riskyStoryFixture.story = 'thirsty_deserter';
+    riskyStoryFixture.storyResolved = false;
+    riskyStoryFixture.storyDaysRemaining = 1;
+    CrewManager.members = [riskyStoryFixture];
+    Game.resources = { wood: 0, plastic: 0, cloth: 0, metal: 0, rope: 0, food: 3, water: 3 };
+    Object.assign(Game.player, { health: 100, hunger: 90, thirst: 90, morale: 70, stamina: 100, sanity: 100 });
+    var riskyNotesFixture = CrewManager.resolveStoryEvents(Game);
+
+    var chartStoryFixture = new Survivor();
+    chartStoryFixture.story = 'folded_chart';
+    chartStoryFixture.storyResolved = false;
+    chartStoryFixture.storyDaysRemaining = 1;
+    CrewManager.members = [chartStoryFixture];
+    Game.victoryCondition = null;
+    Game.rescuedSignal = 0;
+    Game.radioIntel = 0;
+    Game.navigationIntel = 0;
+    CrewManager.resolveStoryEvents(Game);
+
+    var restoredStoryFixture = Survivor.fromData({
+      ...chartStoryFixture,
+      mesh: null
+    });
+
+    var fisherWorkFixture = new Survivor();
+    fisherWorkFixture.skill = SKILLS.find(skill => skill.key === 'fisher');
+    fisherWorkFixture.storyResolved = true;
+    CrewManager.members = [fisherWorkFixture];
+    Game.resources.food = 0;
+    var workNotesFixture = CrewManager.applyDailyWork(Game);
+  `);
+
+  assert.equal(run('riskyStoryFixture.storyResolved'), true);
+  assert.equal(run('Game.resources.water'), 1.5);
+  assert.equal(run('riskyNotesFixture.length'), 1);
+  assert.equal(run('Game.rescuedSignal'), 0);
+  assert.equal(run('Game.radioIntel'), 5);
+  assert.equal(run('Game.navigationIntel'), 20);
+  assert.equal(run("restoredStoryFixture.story"), 'folded_chart');
+  assert.equal(run('restoredStoryFixture.storyResolved'), true);
+  assert.ok(Math.abs(run('Game.resources.food') - 0.3) < 1e-9);
+  assert.equal(run('workNotesFixture.length'), 1);
+});
+
 test('supervivencia diaria, recuperación y autoguardado', () => {
   resetRaft([['0,0', 'net', 35], ['1,0', 'purifier', 40]]);
   run(`
@@ -307,6 +361,8 @@ test('supervivencia diaria, recuperación y autoguardado', () => {
     var medicFixture = new Survivor();
     medicFixture.skill = SKILLS.find(skill => skill.key === 'medic');
     medicFixture.trait = TRAITS.find(trait => trait.key === 'fearful');
+    medicFixture.storyResolved = true;
+    medicFixture.storyDaysRemaining = 0;
     CrewManager.members = [medicFixture];
     Game.resources.food = 2; Game.resources.water = 2.6;
     Object.assign(Game.player, { health: 50, hunger: 90, thirst: 90, morale: 60, sanity: 80 });

@@ -51,6 +51,8 @@ const Game = {
   // Sistemas
   rescuedSignal: 0,
   islandDistance: 2000,
+  radioIntel: 0,
+  navigationIntel: 0,
   victoryCondition: null,
   rowingBoost: 0,
   rowingBoostZ: 0,
@@ -185,6 +187,8 @@ const Game = {
 
     Game.rescuedSignal = 0;
     Game.islandDistance = 2000;
+    Game.radioIntel = 0;
+    Game.navigationIntel = 0;
     Game.victoryCondition = null;
     Game.currentObjective = 0;
     Game.rowingBoost = 0;
@@ -265,6 +269,8 @@ const Game = {
     };
     Game.rescuedSignal = Util.clamp(Number(data.rescuedSignal) || 0, 0, 100);
     Game.islandDistance = Math.max(0, Number(data.islandDistance) || 2000);
+    Game.radioIntel = Util.clamp(Number(data.radioIntel) || 0, 0, 40);
+    Game.navigationIntel = Util.clamp(Number(data.navigationIntel) || 0, 0, 120);
     Game.victoryCondition = ['radio', 'island'].includes(data.victoryCondition) ? data.victoryCondition : null;
     Game.currentObjective = Util.clamp(Number(data.currentObjective) || 0, 0, Game.objectives.length - 1);
     Game.worldOffset = Number(data.worldOffset) || 0;
@@ -325,6 +331,8 @@ const Game = {
       crew: CrewManager.members.map(m => ({ ...m, mesh: null })),
       rescuedSignal: Game.rescuedSignal,
       islandDistance: Game.islandDistance,
+      radioIntel: Game.radioIntel,
+      navigationIntel: Game.navigationIntel,
       victoryCondition: Game.victoryCondition,
       currentObjective: Game.currentObjective,
       worldOffset: Game.worldOffset,
@@ -593,6 +601,7 @@ const Game = {
       object: null,
       maxRange: p.hookRange
     };
+    if (typeof PlayerVis !== 'undefined' && PlayerVis.beginCast) PlayerVis.beginCast(target);
     AudioSys.play('hook');
   },
 
@@ -629,9 +638,10 @@ const Game = {
 
   offerSurvivor: (obj) => {
     const survivor = new Survivor();
+    const storyText = survivor.getStoryOfferText ? `\n\n${survivor.getStoryOfferText()}` : '';
     Game.showDecision(
       'Náufrago a la deriva',
-      `Has encontrado a ${survivor.name}, ${survivor.skill.name.toLowerCase()}. ${survivor.trait.name.toLowerCase()}. ¿Qué haces?`,
+      `Has encontrado a ${survivor.name}.\nHabilidad: ${survivor.skill.name}. Rasgo: ${survivor.trait.name}.${storyText}\n\nRescatarlo añade su talento, pero también hasta 1 de comida y 1,3 de agua al consumo diario, además del desenlace de su historia.`,
       [
         { label: 'Rescatar', action: () => { Game.rescueSurvivor(survivor, obj); } },
         { label: 'Dar suministros', action: () => { Game.giveSupplies(survivor, obj); } },
@@ -1022,8 +1032,13 @@ const Game = {
           Game.resources.food += amount;
           Game.showFloatingText(h.x, h.z, `+${amount} comida`);
           AudioSys.play('collect');
-          bank.fishCount--;
-          if (bank.fishCount <= 0) bank.active = false;
+          if (bank.takeFishVisual) {
+            const caughtFish = bank.takeFishVisual();
+            if (caughtFish && HookVis.attachCatch) HookVis.attachCatch(caughtFish);
+          } else {
+            bank.fishCount--;
+            if (bank.fishCount <= 0) bank.active = false;
+          }
           h.returning = true;
           break;
         }
@@ -1182,7 +1197,13 @@ const Game = {
     } else if (b.key === 'radio') {
       if (Game.rescuedSignal === 0) {
         Game.showDecision('Señal de socorro', '¿Deseas empezar a emitir una señal continua con la radio? Requiere mantenerla operativa.', [
-          { label: 'Sí', action: () => { Game.victoryCondition = 'radio'; Game.rescuedSignal = 1; Log.add('La radio comienza a emitir señal de socorro.'); } },
+          { label: 'Sí', action: () => {
+            Game.victoryCondition = 'radio';
+            Game.rescuedSignal = Math.max(1, 1 + Game.radioIntel);
+            Log.add(Game.radioIntel > 0
+              ? `La radio usa la información de la tripulación y comienza con ${Game.rescuedSignal.toFixed(0)}% de señal.`
+              : 'La radio comienza a emitir señal de socorro.');
+          } },
           { label: 'No', action: () => { } }
         ]);
       } else {
@@ -1191,7 +1212,13 @@ const Game = {
     } else if (b.key === 'motor') {
       if (Game.raft.countProvides('sail') && Game.raft.countProvides('rudder')) {
         Game.showDecision('Navegar hacia la isla', 'El motor y el timón están listos. ¿Partir hacia la isla más cercana?', [
-          { label: 'Sí', action: () => { Game.victoryCondition = 'island'; Game.islandDistance = 300; Log.add('Has decidido navegar hacia una isla.'); } },
+          { label: 'Sí', action: () => {
+            Game.victoryCondition = 'island';
+            Game.islandDistance = Math.max(150, 300 - Game.navigationIntel);
+            Log.add(Game.navigationIntel > 0
+              ? `Las historias de la tripulación acortan la ruta inicial a ${Game.islandDistance.toFixed(0)} m.`
+              : 'Has decidido navegar hacia una isla.');
+          } },
           { label: 'No', action: () => { } }
         ]);
       } else {
@@ -1203,6 +1230,16 @@ const Game = {
   endDay: () => {
     Game.day++;
     AudioSys.play('day');
+
+    const storyNotes = CrewManager.resolveStoryEvents
+      ? CrewManager.resolveStoryEvents(Game)
+      : [];
+    const workNotes = CrewManager.applyDailyWork
+      ? CrewManager.applyDailyWork(Game)
+      : [];
+    const crewNotes = [...storyNotes, ...workNotes];
+    for (const note of storyNotes) Log.add(note);
+    if (workNotes.length) Log.add(`Trabajo de la tripulación: ${workNotes.join(' ')}`);
 
     const crewCount = CrewManager.count();
 
@@ -1252,9 +1289,6 @@ const Game = {
       Game.player.health = Math.min(100, Game.player.health + rest * 2);
       Game.player.morale = Math.min(100, Game.player.morale + 5);
     }
-    if (CrewManager.members.some(m => m.alive && m.skill.effect === 'heal')) {
-      Game.player.health = Math.min(100, Game.player.health + 2);
-    }
     if (Game.raft.totalShelter() > 0) Game.player.morale = Math.min(100, Game.player.morale + 5);
 
     const moraleBonus = CrewManager.getMoraleBonus();
@@ -1297,7 +1331,7 @@ const Game = {
 
     Game.updateObjective();
     Save.save(Game.getSaveData());
-    Game.showDaySummary(foodConsumed, waterConsumed, events);
+    Game.showDaySummary(foodConsumed, waterConsumed, events, crewNotes);
   },
 
   pickDailyEvents: () => {
@@ -1420,7 +1454,7 @@ const Game = {
     document.getElementById('objective-text').textContent = Game.objectives[idx];
   },
 
-  showDaySummary: (food, water, events) => {
+  showDaySummary: (food, water, events, crewNotes = []) => {
     Game.paused = true;
     const panel = document.getElementById('day-summary');
     const content = document.getElementById('summary-content');
@@ -1432,6 +1466,12 @@ const Game = {
     if (Game.victoryCondition === 'radio') html += `<div class="summary-line"><strong>Señal de socorro:</strong> ${Game.rescuedSignal.toFixed(0)}%</div>`;
     if (Game.victoryCondition === 'island') html += `<div class="summary-line"><strong>Distancia a la isla:</strong> ${Math.max(0, Game.islandDistance).toFixed(0)} m</div>`;
     if (events.length) html += `<div class="summary-line"><strong>Sucesos:</strong> ${events.map(Game.eventName).join(', ')}</div>`;
+    if (crewNotes.length) {
+      const safe = crewNotes.map(note => typeof escapeSurvivorHtml === 'function'
+        ? escapeSurvivorHtml(note)
+        : String(note));
+      html += `<div class="summary-line"><strong>Tripulación:</strong><ul>${safe.map(note => `<li>${note}</li>`).join('')}</ul></div>`;
+    }
     content.innerHTML = html;
     panel.classList.remove('hidden');
   },
@@ -1673,10 +1713,10 @@ const Game = {
     CrewManager.syncMeshes(Game.raft);
 
     // Mundo
+    World.updateCamera(center, Game.raft.getBounds(), dt, Game.raft.cellSize);
     World.updateSea(time, Game.worldOffset, Game.worldOffsetZ, Game.storm);
-    World.updateDayNight(Game.time, Game.storm, Game.fog);
+    World.updateDayNight(Game.time, Game.storm, Game.fog, dt);
     World.updateRain(dt, Game.rain);
-    World.followCamera(center.x, center.z, dt);
     World.render();
   }
 };

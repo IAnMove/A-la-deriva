@@ -13,8 +13,18 @@ const World = {
   hemi: null,
   stars: null,
   rain: null,
+  canvas: null,
   camOffset: new THREE.Vector3(0, 15, 12.5),
   camTarget: new THREE.Vector3(0, 0, 0),
+  cameraYaw: 0,
+  cameraYawTarget: 0,
+  cameraZoom: 1,
+  cameraZoomTarget: 1,
+  cameraMaxZoomOut: 1,
+  cameraDragging: false,
+  cameraDragX: 0,
+  CAMERA_MIN_ZOOM: 0.58,
+  CAMERA_MAX_YAW: THREE.MathUtils.degToRad(35),
   waveAmp: 0.18,
   lightning: 0,
 
@@ -27,6 +37,7 @@ const World = {
   },
 
   init: (canvas) => {
+    World.canvas = canvas;
     World.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     World.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     World.renderer.setSize(window.innerWidth, window.innerHeight);
@@ -107,6 +118,49 @@ const World = {
     World.scene.add(World.rain);
 
     window.addEventListener('resize', World.resize);
+    World.bindCameraControls(canvas);
+  },
+
+  bindCameraControls: (canvas) => {
+    // La rueda solo acerca la cámara en una balsa pequeña. El límite de
+    // alejamiento se amplía desde updateCamera cuando crece la balsa.
+    canvas.addEventListener('wheel', e => {
+      e.preventDefault();
+      const direction = Math.sign(e.deltaY);
+      World.cameraZoomTarget = Util.clamp(
+        World.cameraZoomTarget + direction * 0.1,
+        World.CAMERA_MIN_ZOOM,
+        World.cameraMaxZoomOut
+      );
+    }, { passive: false });
+
+    // Botón central: giro horizontal limitado. No usa el botón derecho,
+    // que queda libre para la selección/demolición del juego.
+    canvas.addEventListener('mousedown', e => {
+      if (e.button !== 1) return;
+      e.preventDefault();
+      World.cameraDragging = true;
+      World.cameraDragX = e.clientX;
+    });
+    window.addEventListener('mousemove', e => {
+      if (!World.cameraDragging) return;
+      const dx = e.clientX - World.cameraDragX;
+      World.cameraDragX = e.clientX;
+      World.cameraYawTarget = Util.clamp(
+        World.cameraYawTarget - dx * 0.006,
+        -World.CAMERA_MAX_YAW,
+        World.CAMERA_MAX_YAW
+      );
+    });
+    window.addEventListener('mouseup', e => {
+      if (e.button === 1) World.cameraDragging = false;
+    });
+    window.addEventListener('blur', () => {
+      World.cameraDragging = false;
+    });
+    canvas.addEventListener('auxclick', e => {
+      if (e.button === 1) e.preventDefault();
+    });
   },
 
   resize: () => {
@@ -167,7 +221,7 @@ const World = {
   },
 
   // Actualiza iluminación/cielo según la hora del día (0-24)
-  updateDayNight: (hour, storm, fogActive) => {
+  updateDayNight: (hour, storm, fogActive, dt = 1 / 60) => {
     let a, b, t;
     if (hour < 5 || hour >= 21) { a = b = World.PHASES.night; t = 0; }
     else if (hour < 8) { a = World.PHASES.night; b = World.PHASES.dawn; t = (hour - 5) / 3; }
@@ -190,7 +244,26 @@ const World = {
       ambI *= 0.7;
       fogFar = Math.min(fogFar, 40);
     }
-    if (fogActive) fogFar = Math.min(fogFar, 22);
+
+    // La distancia al centro de la balsa crece al alejar la cámara. La
+    // niebla debe ocultar el horizonte, nunca el jugador que está en él.
+    const viewDistance = World.camera
+      ? World.camera.position.distanceTo(World.camTarget)
+      : World.camOffset.length();
+    let fogNear;
+    if (fogActive) {
+      fogNear = Math.max(10, viewDistance - 4);
+      fogFar = Math.max(38, viewDistance + 18);
+    } else if (storm) {
+      fogNear = Math.max(14, viewDistance - 2);
+      fogFar = Math.max(42, viewDistance + 20);
+    } else {
+      fogNear = Math.max(24, Math.min(34, viewDistance + 8));
+      fogFar = Math.max(fogFar, viewDistance + 25);
+    }
+    // Three.Fog requiere near < far. Dejamos además una franja amplia para
+    // evitar una pared opaca y suavizamos cualquier cambio meteorológico.
+    fogFar = Math.max(fogFar, fogNear + 12);
 
     // Relámpagos durante la tormenta
     if (storm && Math.random() < 0.006) World.lightning = 1;
@@ -202,7 +275,12 @@ const World = {
 
     World.scene.background.copy(sky);
     World.scene.fog.color.copy(sky);
-    World.scene.fog.far = fogFar;
+    const fogBlend = 1 - Math.exp(-Math.max(0, dt) * 4);
+    World.scene.fog.near = Util.lerp(World.scene.fog.near, fogNear, fogBlend);
+    World.scene.fog.far = Util.lerp(World.scene.fog.far, fogFar, fogBlend);
+    if (World.scene.fog.near >= World.scene.fog.far) {
+      World.scene.fog.near = Math.max(0, World.scene.fog.far - 12);
+    }
     // Colores del agua por vértice: profundo, cresta y espuma
     World.waterDeep.copy(water).multiplyScalar(0.45);
     World.waterLight.copy(water).multiplyScalar(1.35).lerp(sky, 0.1);
@@ -240,25 +318,75 @@ const World = {
     pos.needsUpdate = true;
   },
 
-  followCamera: (cx, cz, dt) => {
-    World.camTarget.x = Util.lerp(World.camTarget.x, cx, dt * 3);
-    World.camTarget.z = Util.lerp(World.camTarget.z, cz, dt * 3);
+  // API principal de cámara.
+  // center: { x, z }
+  // bounds: { minX, maxX, minY, maxY } en coordenadas de la cuadrícula
+  // cellSize: tamaño de una celda en unidades del mundo
+  updateCamera: (center, bounds, dt, cellSize = 2) => {
+    const safeDt = Math.max(0, Math.min(dt || 0, 0.1));
+    const followBlend = 1 - Math.exp(-safeDt * 3);
+    World.camTarget.x = Util.lerp(World.camTarget.x, center.x, followBlend);
+    World.camTarget.z = Util.lerp(World.camTarget.z, center.z, followBlend);
+
+    // El encuadre inicial es el máximo alejamiento para una balsa pequeña.
+    // Al crecer su huella se amplía proporcionalmente, con un límite sensato.
+    let maxZoomOut = 1;
+    if (bounds) {
+      const spanX = (Math.abs(bounds.maxX - bounds.minX) + 1) * cellSize;
+      const spanZ = (Math.abs(bounds.maxY - bounds.minY) + 1) * cellSize;
+      const diagonal = Math.hypot(spanX, spanZ);
+      maxZoomOut = Math.max(1, spanX / 8, spanZ / 8, diagonal / 11);
+    }
+    World.cameraMaxZoomOut = Util.clamp(maxZoomOut, 1, 2.4);
+    World.cameraZoomTarget = Util.clamp(
+      World.cameraZoomTarget,
+      World.CAMERA_MIN_ZOOM,
+      World.cameraMaxZoomOut
+    );
+
+    // Q/R ofrecen una alternativa al ratón y mantienen el mismo límite.
+    if (typeof Input !== 'undefined') {
+      const keyboardTurn = 0.85 * safeDt;
+      if (Input.isDown('KeyQ')) World.cameraYawTarget -= keyboardTurn;
+      if (Input.isDown('KeyR')) World.cameraYawTarget += keyboardTurn;
+      World.cameraYawTarget = Util.clamp(
+        World.cameraYawTarget,
+        -World.CAMERA_MAX_YAW,
+        World.CAMERA_MAX_YAW
+      );
+    }
+
+    const cameraBlend = 1 - Math.exp(-safeDt * 8);
+    World.cameraZoom = Util.lerp(World.cameraZoom, World.cameraZoomTarget, cameraBlend);
+    World.cameraYaw = Util.lerp(World.cameraYaw, World.cameraYawTarget, cameraBlend);
+
+    const horizontal = World.camOffset.z * World.cameraZoom;
+    const height = World.camOffset.y * World.cameraZoom;
+    const offsetX = Math.sin(World.cameraYaw) * horizontal;
+    const offsetZ = Math.cos(World.cameraYaw) * horizontal;
     const bob = Math.sin(performance.now() / 1400) * 0.25;
     World.camera.position.set(
-      World.camTarget.x + World.camOffset.x,
-      World.camTarget.y + World.camOffset.y + bob,
-      World.camTarget.z + World.camOffset.z
+      World.camTarget.x + offsetX,
+      World.camTarget.y + height + bob,
+      World.camTarget.z + offsetZ
     );
     World.camera.lookAt(World.camTarget.x, 0, World.camTarget.z);
+  },
+
+  // Compatibilidad con llamadas existentes y partidas/pruebas antiguas.
+  followCamera: (cx, cz, dt) => {
+    World.updateCamera({ x: cx, z: cz }, null, dt);
   },
 
   // Raycasting desde el ratón al plano del mar (y = 0)
   raycaster: new THREE.Raycaster(),
   seaPlane: new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
   mouseToWorld: (mx, my) => {
+    const width = World.canvas ? World.canvas.clientWidth : window.innerWidth;
+    const height = World.canvas ? World.canvas.clientHeight : window.innerHeight;
     const ndc = new THREE.Vector2(
-      (mx / window.innerWidth) * 2 - 1,
-      -(my / window.innerHeight) * 2 + 1
+      (mx / width) * 2 - 1,
+      -(my / height) * 2 + 1
     );
     World.raycaster.setFromCamera(ndc, World.camera);
     const out = new THREE.Vector3();

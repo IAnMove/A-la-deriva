@@ -169,10 +169,95 @@ class Danger {
   }
 }
 
+// Los bancos clonan estas plantillas: las geometrías y materiales se comparten
+// entre peces para que un banco grande no multiplique el coste en GPU.
+const FISH_PALETTES = [
+  { body: 0x29b6f6, fins: 0x0277bd, belly: 0xb3e5fc },
+  { body: 0xffb74d, fins: 0xef6c00, belly: 0xffe0b2 },
+  { body: 0x80cbc4, fins: 0x00897b, belly: 0xb2dfdb },
+];
+const FishModelTemplates = [];
+
+function fishPart(geometry, material) {
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.castShadow = true;
+  mesh.userData.sharedFishResource = true;
+  return mesh;
+}
+
+function buildFishTemplate(paletteIndex = 0) {
+  const palette = FISH_PALETTES[paletteIndex % FISH_PALETTES.length];
+  const fish = new THREE.Group();
+
+  const body = fishPart(
+    new THREE.SphereGeometry(0.5, 8, 6),
+    mat(palette.body)
+  );
+  body.scale.set(0.42, 0.34, 0.9);
+  fish.add(body);
+
+  // Cola triangular con pivote propio para poder aletear.
+  const tailPivot = new THREE.Group();
+  tailPivot.name = 'fish-tail';
+  tailPivot.position.z = -0.38;
+  const tail = fishPart(
+    new THREE.ConeGeometry(0.24, 0.42, 3),
+    mat(palette.fins)
+  );
+  tail.rotation.x = Math.PI / 2;
+  tail.position.z = -0.18;
+  tail.scale.x = 0.55;
+  tailPivot.add(tail);
+  fish.add(tailPivot);
+
+  const dorsal = fishPart(
+    new THREE.ConeGeometry(0.12, 0.27, 3),
+    mat(palette.fins)
+  );
+  dorsal.position.set(0, 0.23, -0.05);
+  dorsal.rotation.z = Math.PI;
+  fish.add(dorsal);
+
+  const finL = fishPart(
+    new THREE.ConeGeometry(0.08, 0.23, 3),
+    mat(palette.belly)
+  );
+  finL.position.set(-0.2, -0.04, -0.02);
+  finL.rotation.z = -Math.PI / 2;
+  finL.rotation.y = 0.35;
+  fish.add(finL);
+  const finR = finL.clone();
+  finR.position.x = 0.2;
+  finR.rotation.z = Math.PI / 2;
+  fish.add(finR);
+
+  const eyeGeometry = new THREE.SphereGeometry(0.045, 6, 4);
+  const eyeL = fishPart(eyeGeometry, mat(0x102027));
+  eyeL.position.set(-0.16, 0.1, 0.35);
+  fish.add(eyeL);
+  const eyeR = fishPart(eyeGeometry, mat(0x102027));
+  eyeR.position.set(0.16, 0.1, 0.35);
+  fish.add(eyeR);
+
+  fish.userData.isLowPolyFish = true;
+  return fish;
+}
+
+function makeFishMesh(scale = 1, paletteIndex = 0) {
+  const index = Math.abs(paletteIndex) % FISH_PALETTES.length;
+  if (!FishModelTemplates[index]) FishModelTemplates[index] = buildFishTemplate(index);
+  const fish = FishModelTemplates[index].clone(true);
+  fish.scale.setScalar(scale);
+  fish.userData.tail = fish.getObjectByName('fish-tail');
+  fish.userData.swimOffset = Math.random() * Math.PI * 2;
+  return fish;
+}
+
 class FishBank {
   constructor(x, z, scene) {
     this.x = x;
     this.z = z;
+    this.scene = scene;
     this.radius = 1.8;
     this.vx = Util.rand(-0.6, -0.3);
     this.vz = Util.rand(-0.1, 0.1);
@@ -189,13 +274,37 @@ class FishBank {
     this.mesh.add(disc);
     this.fish = [];
     for (let i = 0; i < this.fishCount; i++) {
-      const f = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.35, 4), mat(0x4fc3f7));
-      f.rotation.x = Math.PI / 2;
+      const f = makeFishMesh(Util.rand(0.42, 0.58), i);
+      f.userData.orbitOffset = Math.random() * 0.25;
       this.mesh.add(f);
       this.fish.push(f);
     }
     this.mesh.position.set(x, 0, z);
     scene.add(this.mesh);
+  }
+
+  // Extrae un pez real del banco, conserva su posición mundial y reduce el
+  // contador. El llamador puede pasarlo a HookVis.attachCatch().
+  takeFishVisual() {
+    if (this.fishCount <= 0 || this.fish.length === 0) return null;
+    this.fishCount--;
+    const fish = this.fish.pop();
+    this.mesh.updateMatrixWorld(true);
+    this.scene.attach(fish);
+    fish.userData.caught = true;
+    if (this.fishCount <= 0) this.active = false;
+    return fish;
+  }
+
+  // Mantiene compatible cualquier lógica antigua que todavía reduzca
+  // fishCount directamente: el cambio también se refleja visualmente.
+  syncVisualCount() {
+    const target = Math.max(0, Math.floor(this.fishCount));
+    while (this.fish.length > target) {
+      const fish = this.fish.pop();
+      this.mesh.remove(fish);
+      fish.visible = false;
+    }
   }
 
   update(dt, currentSpeed, currentSpeedZ, time) {
@@ -206,20 +315,37 @@ class FishBank {
     this.mesh.position.x = this.x;
     this.mesh.position.z = this.z;
     this.mesh.position.y = World.waveHeight(this.x, this.z, time, Game.worldOffset, Game.worldOffsetZ) * World.waveAmp;
+    this.syncVisualCount();
     for (let i = 0; i < this.fish.length; i++) {
-      const a = (i / this.fish.length) * Math.PI * 2 + time * 1.5;
-      this.fish[i].position.set(
+      const fish = this.fish[i];
+      const a = (i / Math.max(1, this.fish.length)) * Math.PI * 2
+        + time * 1.5 + fish.userData.orbitOffset;
+      fish.position.set(
         Math.cos(a) * this.radius * 0.55,
-        0.1 + Math.sin(time * 3 + i) * 0.08,
+        -0.08 + Math.sin(time * 3 + i) * 0.08,
         Math.sin(a) * this.radius * 0.35
       );
-      this.fish[i].rotation.z = -a;
+      // La nariz (+Z local) sigue la tangente de la órbita.
+      const dx = -Math.sin(a) * this.radius * 0.55;
+      const dz = Math.cos(a) * this.radius * 0.35;
+      fish.rotation.y = Math.atan2(dx, dz);
+      if (fish.userData.tail) {
+        fish.userData.tail.rotation.y =
+          Math.sin(time * 9 + fish.userData.swimOffset) * 0.42;
+      }
     }
   }
 
   dispose(scene) {
     scene.remove(this.mesh);
-    this.mesh.traverse(o => { if (o.geometry) o.geometry.dispose(); });
+    // Los peces usan recursos compartidos; solo el indicador del banco es
+    // propiedad exclusiva de esta instancia.
+    this.mesh.traverse(o => {
+      if (o.geometry && !o.userData.sharedFishResource) o.geometry.dispose();
+      if (o.material && !o.userData.sharedFishResource && o.material.dispose) {
+        o.material.dispose();
+      }
+    });
   }
 }
 

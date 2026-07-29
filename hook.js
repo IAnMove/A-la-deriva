@@ -6,6 +6,8 @@
 const HookVis = {
   line: null,
   tip: null,
+  catchMesh: null,
+  lineOrigin: null,
 
   init: (scene) => {
     const geo = new THREE.BufferGeometry().setFromPoints([
@@ -25,20 +27,54 @@ const HookVis = {
     HookVis.tip.add(claw);
     HookVis.tip.visible = false;
     scene.add(HookVis.tip);
+    HookVis.lineOrigin = new THREE.Vector3();
   },
 
   show: (px, pz, hx, hz) => {
     HookVis.line.visible = true;
     HookVis.tip.visible = true;
     const pos = HookVis.line.geometry.attributes.position;
-    pos.setXYZ(0, px, 1.0, pz);
+    const rodTip = typeof PlayerVis !== 'undefined'
+      ? PlayerVis.getRodTipWorld(HookVis.lineOrigin)
+      : null;
+    if (rodTip) pos.setXYZ(0, rodTip.x, rodTip.y, rodTip.z);
+    else pos.setXYZ(0, px, 1.0, pz);
     pos.setXYZ(1, hx, 0.35, hz);
     pos.needsUpdate = true;
     HookVis.tip.position.set(hx, 0.35, hz);
+
+    if (HookVis.catchMesh) {
+      const now = (typeof performance !== 'undefined' ? performance.now() : Date.now()) * 0.001;
+      HookVis.catchMesh.rotation.z = Math.PI / 2 + Math.sin(now * 10) * 0.16;
+      const tail = HookVis.catchMesh.userData.tail;
+      if (tail) tail.rotation.y = Math.sin(now * 15) * 0.55;
+    }
+  },
+
+  // Conecta al anzuelo cualquier modelo extraído. Para peces:
+  // HookVis.attachCatch(bank.takeFishVisual()).
+  attachCatch: (mesh) => {
+    if (!mesh || !HookVis.tip) return null;
+    HookVis.clearCatch();
+    HookVis.tip.add(mesh);
+    mesh.visible = true;
+    mesh.position.set(0, -0.34, 0);
+    mesh.rotation.set(0, 0, Math.PI / 2);
+    mesh.scale.multiplyScalar(1.2);
+    HookVis.catchMesh = mesh;
+    return mesh;
+  },
+
+  clearCatch: () => {
+    if (!HookVis.catchMesh) return;
+    HookVis.catchMesh.removeFromParent();
+    HookVis.catchMesh.visible = false;
+    HookVis.catchMesh = null;
   },
 
   hide: () => {
     if (HookVis.line) HookVis.line.visible = false;
     if (HookVis.tip) HookVis.tip.visible = false;
+    HookVis.clearCatch();
   }
 };

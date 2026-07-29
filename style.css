@@ -74,6 +74,8 @@ html, body {
   padding: 32px;
   max-width: 560px;
   width: 92%;
+  max-height: 92dvh;
+  overflow-y: auto;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
   text-align: center;
 }
@@ -291,6 +293,9 @@ button.danger { background: linear-gradient(180deg, #ff7043, #d84315); color: #f
 }
 .crew-name { font-weight: 700; color: var(--accent); }
 .crew-role { font-size: 0.8rem; color: var(--muted); }
+.crew-skill-detail { margin-top: 3px; font-size: 0.76rem; line-height: 1.3; color: var(--text); }
+.crew-story { margin-top: 8px; font-size: 0.82rem; color: var(--warning); }
+.crew-story-detail { margin-top: 3px; font-size: 0.78rem; line-height: 1.35; color: var(--text); }
 .crew-bars { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
 .crew-bars .bar { margin: 0; }
 .crew-bars span { width: 46px; font-size: 0.75rem; }
@@ -319,6 +324,8 @@ button.danger { background: linear-gradient(180deg, #ff7043, #d84315); color: #f
 #day-summary .modal-content { text-align: left; }
 #summary-content { margin: 12px 0; }
 .summary-line { margin: 4px 0; }
+.summary-line ul { margin: 6px 0 0; padding-left: 20px; }
+#decision-text { white-space: pre-line; line-height: 1.45; }
 
 /* Responsive */
 @media (max-width: 720px) {

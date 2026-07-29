@@ -395,8 +395,12 @@ class Raft {
   }
 
   getBounds() {
-    let minX = 0, maxX = 0, minY = 0, maxY = 0;
-    for (const k of this.grid.keys()) {
+    if (this.grid.size === 0) return { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+    const keys = this.grid.keys();
+    const first = keys.next().value;
+    let [minX, minY] = first.split(',').map(Number);
+    let maxX = minX, maxY = minY;
+    for (const k of keys) {
       const [gx, gy] = k.split(',').map(Number);
       minX = Math.min(minX, gx); maxX = Math.max(maxX, gx);
       minY = Math.min(minY, gy); maxY = Math.max(maxY, gy);
