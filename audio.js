@@ -1,0 +1,66 @@
+/*****************************************************
+ * audio.js - Efectos de sonido con Web Audio API
+ *****************************************************/
+
+const AudioSys = (() => {
+  let ctx = null;
+  let enabled = true;
+  function ensure() {
+    if (!enabled) return null;
+    if (!ctx) {
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        ctx = new AC();
+      } catch (e) { enabled = false; return null; }
+    }
+    if (ctx && ctx.state === 'suspended') ctx.resume();
+    return ctx;
+  }
+  function beep(freq, duration, type = 'sine', vol = 0.1) {
+    const c = ensure(); if (!c) return;
+    const o = c.createOscillator();
+    const g = c.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(freq, c.currentTime);
+    g.gain.setValueAtTime(vol, c.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + duration);
+    o.connect(g);
+    g.connect(c.destination);
+    o.start();
+    o.stop(c.currentTime + duration);
+  }
+  function noise(duration, vol = 0.1) {
+    const c = ensure(); if (!c) return;
+    const bufferSize = c.sampleRate * duration;
+    const buffer = c.createBuffer(1, bufferSize, c.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+    const src = c.createBufferSource();
+    src.buffer = buffer;
+    const g = c.createGain();
+    g.gain.setValueAtTime(vol, c.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + duration);
+    src.connect(g);
+    g.connect(c.destination);
+    src.start();
+    src.stop(c.currentTime + duration);
+  }
+  return {
+    setEnabled: (v) => { enabled = v; },
+    isEnabled: () => enabled,
+    play: (name) => {
+      if (!enabled) return;
+      switch (name) {
+        case 'collect': beep(880, 0.12, 'sine', 0.08); break;
+        case 'hook': beep(440, 0.2, 'triangle', 0.08); break;
+        case 'build': beep(330, 0.3, 'square', 0.06); break;
+        case 'damage': beep(160, 0.35, 'sawtooth', 0.12); break;
+        case 'storm': noise(0.8, 0.15); break;
+        case 'alert': beep(600, 0.15, 'square', 0.1); beep(600, 0.15, 'square', 0.1); break;
+        case 'day': beep(523, 0.3, 'sine', 0.08); beep(659, 0.4, 'sine', 0.08); break;
+        case 'win': beep(523, 0.2, 'sine', 0.1); beep(659, 0.2, 'sine', 0.1); beep(784, 0.4, 'sine', 0.1); break;
+        case 'lose': beep(392, 0.4, 'sawtooth', 0.12); beep(330, 0.6, 'sawtooth', 0.12); break;
+      }
+    }
+  };
+})();

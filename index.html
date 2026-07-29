@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>A la Deriva 3D</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Pantalla inicial -->
+  <div id="start-screen" class="screen active">
+    <div class="panel">
+      <h1>A la Deriva 3D</h1>
+      <p class="tagline">Sobrevive en el océano, construye tu balsa y escapa.</p>
+      <div class="controls-help">
+        <h2>Controles</h2>
+        <ul>
+          <li><strong>WASD / Flechas</strong>: mover al náufrago</li>
+          <li><strong>Ratón</strong>: apuntar el gancho / elegir celda de construcción</li>
+          <li><strong>Clic izquierdo</strong>: lanzar/recoger gancho; colocar estructura; caminar a una celda; remar en el borde</li>
+          <li><strong>Clic derecho</strong>: seleccionar celda (E para desmontarla)</li>
+          <li><strong>Shift</strong>: remar con las manos desde donde estás</li>
+          <li><strong>E</strong>: interactuar / desmontar celda seleccionada</li>
+          <li><strong>B</strong>: abrir menú de construcción</li>
+          <li><strong>Escape</strong>: cancelar colocación / cerrar menús</li>
+          <li><strong>Espacio</strong>: pausar</li>
+          <li><strong>M</strong>: silenciar/activar sonido</li>
+        </ul>
+      </div>
+      <div class="start-buttons">
+        <button id="btn-new-game">Nueva partida</button>
+        <button id="btn-continue">Continuar</button>
+      </div>
+      <p class="version">v1.2 · Balance y estabilidad 3D</p>
+    </div>
+  </div>
+
+  <!-- Pantalla de fin -->
+  <div id="end-screen" class="screen">
+    <div class="panel">
+      <h1 id="end-title">Fin de la partida</h1>
+      <p id="end-cause"></p>
+      <div id="end-stats"></div>
+      <button id="btn-restart">Reiniciar</button>
+      <button id="btn-menu">Menú principal</button>
+    </div>
+  </div>
+
+  <!-- Pantalla de pausa -->
+  <div id="pause-screen" class="screen">
+    <div class="panel small">
+      <h2>Pausa</h2>
+      <button id="btn-resume">Continuar</button>
+      <button id="btn-save">Guardar partida</button>
+      <button id="btn-pause-menu">Menú principal</button>
+    </div>
+  </div>
+
+  <!-- Canvas del juego (Three.js lo rellena) -->
+  <canvas id="game-canvas"></canvas>
+
+  <!-- Overlays de efectos a pantalla completa -->
+  <div id="fx-heat"></div>
+  <div id="fx-hallucination"></div>
+
+  <!-- Interfaz principal -->
+  <div id="ui" class="hidden">
+    <!-- Barra superior -->
+    <div id="top-bar">
+      <div class="stat-group">
+        <span id="day-label">Día 1</span>
+        <span id="time-label">06:00</span>
+        <span id="phase-label">Amanecer</span>
+      </div>
+      <div class="stat-group">
+        <span id="food-label" title="Comida">🍖 0</span>
+        <span id="water-label" title="Agua">💧 0</span>
+        <span id="weight-label" title="Peso">⚖ 0/0</span>
+      </div>
+      <div class="stat-group">
+        <button id="btn-sound" title="Silenciar (M)">🔊</button>
+        <button id="btn-pause" title="Pausa (Espacio)">⏸</button>
+      </div>
+    </div>
+
+    <!-- Barra de estado del jugador -->
+    <div id="player-hud">
+      <div class="bar"><span>Salud</span><div class="track"><div id="bar-health" class="fill health"></div></div></div>
+      <div class="bar"><span>Hambre</span><div class="track"><div id="bar-hunger" class="fill hunger"></div></div></div>
+      <div class="bar"><span>Sed</span><div class="track"><div id="bar-thirst" class="fill thirst"></div></div></div>
+      <div class="bar"><span>Moral</span><div class="track"><div id="bar-morale" class="fill morale"></div></div></div>
+      <div class="bar"><span>Cansancio</span><div class="track"><div id="bar-stamina" class="fill stamina"></div></div></div>
+      <div class="bar"><span>Cordura</span><div class="track"><div id="bar-sanity" class="fill sanity"></div></div></div>
+    </div>
+
+    <!-- Panel de recursos -->
+    <div id="resource-panel">
+      <div class="resource" title="Madera"><span class="icon">🪵</span><span id="res-wood">0</span></div>
+      <div class="resource" title="Plástico"><span class="icon">🧴</span><span id="res-plastic">0</span></div>
+      <div class="resource" title="Tela"><span class="icon">🧵</span><span id="res-cloth">0</span></div>
+      <div class="resource" title="Metal"><span class="icon">⚙️</span><span id="res-metal">0</span></div>
+      <div class="resource" title="Cuerda"><span class="icon">🪢</span><span id="res-rope">0</span></div>
+    </div>
+
+    <!-- Objetivo -->
+    <div id="objective-panel">
+      <strong>Objetivo:</strong> <span id="objective-text">Recoge restos y sobrevive.</span>
+    </div>
+
+    <!-- Consumo y estado -->
+    <div id="status-panel">
+      <div>Consumo/día: <span id="daily-food">1</span> 🍖 / <span id="daily-water">1.3</span> 💧</div>
+      <div>Estructura: <span id="structural-health">100%</span></div>
+      <div>Remo: <span id="rowing-status">listo</span></div>
+    </div>
+
+    <!-- Botones de acción -->
+    <div id="action-bar">
+      <button id="btn-build">Construir (B)</button>
+      <button id="btn-crew">Tripulación</button>
+      <button id="btn-log">Registro</button>
+    </div>
+
+    <!-- Mensajes de evento central -->
+    <div id="event-message"></div>
+
+    <!-- Decisiones modales -->
+    <div id="decision-panel" class="modal hidden">
+      <div class="modal-content">
+        <h3 id="decision-title"></h3>
+        <p id="decision-text"></p>
+        <div id="decision-buttons"></div>
+      </div>
+    </div>
+
+    <!-- Menú de construcción -->
+    <div id="build-menu" class="modal hidden">
+      <div class="modal-content wide">
+        <div class="modal-header">
+          <h3>Construcción</h3>
+          <button class="close-btn" id="close-build">✕</button>
+        </div>
+        <div id="build-tabs">
+          <button class="tab active" data-tab="basic">Básicas</button>
+          <button class="tab" data-tab="advanced">Avanzadas</button>
+        </div>
+        <div id="build-list"></div>
+        <div id="build-info"></div>
+      </div>
+    </div>
+
+    <!-- Panel de tripulación -->
+    <div id="crew-panel" class="modal hidden">
+      <div class="modal-content wide">
+        <div class="modal-header">
+          <h3>Tripulación</h3>
+          <button class="close-btn" id="close-crew">✕</button>
+        </div>
+        <div id="crew-list"></div>
+      </div>
+    </div>
+
+    <!-- Registro de eventos -->
+    <div id="log-panel" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>Registro</h3>
+          <button class="close-btn" id="close-log">✕</button>
+        </div>
+        <div id="log-list"></div>
+      </div>
+    </div>
+
+    <!-- Tooltip -->
+    <div id="tooltip"></div>
+
+    <!-- Resumen del día -->
+    <div id="day-summary" class="modal hidden">
+      <div class="modal-content">
+        <h3 id="summary-title">Resumen del día</h3>
+        <div id="summary-content"></div>
+        <button id="btn-summary-ok">Continuar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Three.js (build UMD para funcionar desde file://) -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js"></script>
+  <!-- Scripts del juego -->
+  <script src="engine.js"></script>
+  <script src="audio.js"></script>
+  <script src="save.js"></script>
+  <script src="world.js"></script>
+  <script src="raft.js"></script>
+  <script src="survivor.js"></script>
+  <script src="entities.js"></script>
+  <script src="player.js"></script>
+  <script src="hook.js"></script>
+  <script src="game.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>
