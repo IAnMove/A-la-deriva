@@ -415,7 +415,20 @@ button.danger { background: linear-gradient(180deg, #ff7043, #d84315); color: #f
 .build-icon { font-size: 1.8rem; width: 40px; text-align: center; }
 .build-info { flex: 1; text-align: left; }
 .build-name { font-weight: 700; }
+.build-desc {
+  margin: 3px 0 5px;
+  color: #c8dbe3;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+.build-risk {
+  margin: 0 0 5px;
+  color: var(--warning);
+  font-size: 0.74rem;
+  line-height: 1.3;
+}
 .build-cost { font-size: 0.8rem; color: var(--muted); }
+.build-drawback { color: var(--warning); }
 
 #build-info {
   margin-top: 12px;

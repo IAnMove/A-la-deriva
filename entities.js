@@ -274,7 +274,11 @@ class Danger {
     this.lockedX = target.x;
     this.lockedZ = target.z;
     this.state = 'telegraph';
-    this.attackTimer = 2.4;
+    const lookout = typeof Game !== 'undefined' &&
+      Game.raft?.countProvides
+      ? Game.raft.countProvides('lookout')
+      : 0;
+    this.attackTimer = 2.4 + Math.min(2.4, lookout * 1.2);
     this.justLocked = true;
     this.targetMarker.visible = true;
     return true;

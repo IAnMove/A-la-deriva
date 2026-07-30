@@ -3,9 +3,13 @@
  *****************************************************/
 
 const Save = {
-  SCHEMA_VERSION: 3,
-  KEY: 'aladeriva3d_save_v3',
-  LEGACY_KEYS: ['aladeriva3d_save_v2', 'aladeriva3d_save_v1'],
+  SCHEMA_VERSION: 4,
+  KEY: 'aladeriva3d_save_v4',
+  LEGACY_KEYS: [
+    'aladeriva3d_save_v3',
+    'aladeriva3d_save_v2',
+    'aladeriva3d_save_v1'
+  ],
   BEST: 'aladeriva3d_best_v1',
   PREFS: 'aladeriva3d_prefs_v2',
   LEGACY_PREFS: ['aladeriva3d_prefs_v1'],

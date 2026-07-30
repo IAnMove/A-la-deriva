@@ -113,9 +113,9 @@ const GameUI = Object.freeze({
     const element = document.getElementById('event-message');
     element.textContent = text;
     const normalized = String(text).toLowerCase();
-    const severity = /tibur|coral|encall|devor|muert|ataque|golpe|tormenta|ola|hostil|crisis/.test(normalized)
+    const severity = /tibur|coral|encall|devor|muert|ataque|golpe|tormenta|ola|hostil|crisis|incend|mot[ií]n|brote|infecc/.test(normalized)
       ? 'danger'
-      : /aviso|calor|daño|hambre|sed|cansad/.test(normalized)
+      : /aviso|calor|daño|hambre|sed|cansad|corriente|contamin/.test(normalized)
         ? 'warning'
         : 'info';
     element.classList.remove('danger', 'warning', 'info');
@@ -233,6 +233,11 @@ const GameUI = Object.freeze({
     const navigationStatus = document.getElementById('navigation-status');
     navigationStatus.textContent =
       `Rumbo: ${heading} · Combustible: ${Util.formatAmount(navigation.fuel)}` +
+      (game.anchorDeployed ? ' · Ancla desplegada' : '') +
+      (game.beaconLit ? ' · Faro encendido' : '') +
+      (game.infectionDays > 0
+        ? ` · Infección ${game.infectionDays} d`
+        : '') +
       (game.victoryCondition === 'island'
         ? ` · Isla: ${Math.max(0, game.islandDistance).toFixed(0)} m`
         : '');
@@ -301,11 +306,19 @@ const GameUI = Object.freeze({
     const panel = document.getElementById('threat-panel');
     if (!panel) return;
     const center = game.raft.getCenter();
-    const threat =
+    const worldThreat =
       typeof EntityManager !== 'undefined' &&
       typeof EntityManager.getThreatSummary === 'function'
         ? EntityManager.getThreatSummary(center)
         : null;
+    const threat = worldThreat || (game.infectionDays > 0
+      ? {
+          icon: '🦠',
+          title: 'Infección activa',
+          detail: `${game.infectionDays} día(s) restantes · usa una enfermería`,
+          level: game.player.health < 35 ? 'critical' : 'warning'
+        }
+      : null);
     const vignette = document.getElementById('fx-danger');
     if (!threat) {
       panel.classList.add('hidden');

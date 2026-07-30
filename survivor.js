@@ -683,6 +683,12 @@ const CrewManager = {
 
   conflictSupport: (hostileMember = null) => Util.clamp(
     CrewManager.guardStrength() +
+    (
+      typeof Game !== 'undefined' &&
+      Game.raft?.countProvides
+        ? Game.raft.countProvides('containment') * 0.18
+        : 0
+    ) +
     CrewManager.members
       .filter(member =>
         member.alive &&

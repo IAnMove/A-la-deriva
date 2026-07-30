@@ -312,6 +312,188 @@ test('el daño reduce prestaciones y a cero las desactiva', () => {
   assert.equal(run('Game.resources.water'), 0);
 });
 
+test('las nuevas construcciones explican función y contrapartida en la lista', () => {
+  run(`
+    var newBuildingKeysFixture = [
+      'lookout', 'smokehouse', 'armor', 'anchor', 'bunk',
+      'harpoon', 'infirmary', 'chart', 'beacon', 'containment'
+    ];
+    var allNewBuildingsDescribedFixture = newBuildingKeysFixture.every(key =>
+      BUILDINGS[key] &&
+      typeof BUILDINGS[key].desc === 'string' &&
+      BUILDINGS[key].desc.length > 20 &&
+      typeof BUILDINGS[key].drawback === 'string' &&
+      BUILDINGS[key].drawback.length > 20
+    );
+    var buildDescriptionListFixture = document.createElement('div');
+    BuildManager.renderMenu(
+      buildDescriptionListFixture,
+      { wood: 99, plastic: 99, cloth: 99, metal: 99, rope: 99 }
+    );
+    var renderedDescriptionsFixture =
+      buildDescriptionListFixture.children.map(child => child.innerHTML).join(' ');
+  `);
+  assert.equal(run('allNewBuildingsDescribedFixture'), true);
+  assert.match(run('renderedDescriptionsFixture'), /Alarga el aviso/);
+  assert.match(run('renderedDescriptionsFixture'), /Es alta y recibe/);
+  assert.match(run('renderedDescriptionsFixture'), /Reduce el deterioro/);
+  assert.match(run('renderedDescriptionsFixture'), /Reduce el daño/);
+});
+
+test('blindaje, ancla, carta y arponera cambian la navegación y el peligro', () => {
+  resetRaft([
+    ['0,0', 'armor', 80],
+    ['1,0', 'floor', 200]
+  ]);
+  run(`
+    Game.raft.get(1, 0).maxHealth = 200;
+    var armoredReefDamageFixture =
+      Game.raft.takeDamage(100, 3, 1, 'reef');
+
+    Game.raft.grid.clear();
+    Game.raft.grid.set('0,0', {
+      buildingKey: 'floor', health: 200, maxHealth: 200, mesh: null
+    });
+    Game.raft.grid.set('1,0', {
+      buildingKey: 'floor', health: 200, maxHealth: 200, mesh: null
+    });
+    var bareReefDamageFixture =
+      Game.raft.takeDamage(100, 3, 1, 'reef');
+
+    Game.raft.grid.clear();
+    Game.raft.grid.set('0,0', {
+      buildingKey: 'floor', health: 50, maxHealth: 50, mesh: null
+    });
+    Game.raft.grid.set('1,0', {
+      buildingKey: 'anchor', health: 55, maxHealth: 55, mesh: null
+    });
+    Game.anchorDeployed = true;
+    Game.beaconLit = false;
+    Game.worldOffset = 0;
+    Game.worldOffsetZ = 0;
+    Game.victoryCondition = null;
+    EntityManager.objects = [];
+    EntityManager.dangers = [];
+    EntityManager.reefs = [];
+    EntityManager.fishBanks = [];
+    Game.updateEntities(1);
+    var anchoredOffsetFixture = Game.worldOffset;
+    Game.anchorDeployed = false;
+    Game.updateEntities(1);
+    var driftingOffsetFixture = Game.worldOffset;
+
+    var navigationCountFixture = Game.raft.countProvides;
+    var navigationLoadFixture = Game.loadSpeedMultiplier;
+    Game.raft.countProvides = key => ({
+      sail: 1, rudder: 1, motor: 0, navigation: 1
+    })[key] || 0;
+    Game.loadSpeedMultiplier = () => 1;
+    Game.victoryCondition = 'island';
+    Game.islandDistance = 100;
+    Game.resources.fuel = 0;
+    var chartNavigationFixture = Game.resolveNavigationDay();
+    Game.raft.countProvides = navigationCountFixture;
+    Game.loadSpeedMultiplier = navigationLoadFixture;
+
+    Game.raft.grid.clear();
+    Game.raft.grid.set('0,0', {
+      buildingKey: 'harpoon', health: 55, maxHealth: 55, mesh: null
+    });
+    Game.resetPlayerState({ x: 1, z: 1 });
+    Game.resources.wood = 0;
+    Game.resources.food = 0;
+    Game.raft.selected = null;
+    var harpoonScaredFixture = false;
+    EntityManager.dangers = [{
+      active: true,
+      state: 'charge',
+      x: 2,
+      z: 1,
+      scareFrom() {
+        harpoonScaredFixture = true;
+        this.state = 'flee';
+      }
+    }];
+    Game.interact();
+  `);
+  assert.ok(run('armoredReefDamageFixture') < run('bareReefDamageFixture'));
+  assert.equal(run('anchoredOffsetFixture'), 0);
+  assert.ok(run('driftingOffsetFixture') > 0);
+  assert.equal(run('chartNavigationFixture.moved'), 16);
+  assert.equal(run('harpoonScaredFixture'), true);
+  assert.equal(run('Game.resources.food'), 0.5);
+  assert.equal(run('Game.raft.get(0, 0).health'), 49);
+});
+
+test('ahumadero, camarotes, enfermería y faro tienen costes diarios reales', () => {
+  run(`
+    var preservationDayFixture = 3;
+    for (; preservationDayFixture < 300; preservationDayFixture++) {
+      var preservationSeedFixture = (
+        Math.imul(Math.floor(preservationDayFixture), 2654435761) ^
+        Math.imul(1, 2246822519)
+      ) >>> 0;
+      if (preservationSeedFixture / 4294967296 < 0.08) break;
+    }
+    Game.raft.grid.clear();
+    Game.raft.grid.set('0,0', {
+      buildingKey: 'smokehouse', health: 38, maxHealth: 38, mesh: null
+    });
+    Game.day = preservationDayFixture;
+    Game.stats.rescued = 0;
+    Game.resources.food = 2;
+    Game.resources.water = 2;
+    Game.resolveUnstoredSpoilage();
+    var preservedFoodLossFixture = 2 - Game.resources.food;
+
+    Game.raft.grid.clear();
+    Game.raft.grid.set('0,0', {
+      buildingKey: 'floor', health: 50, maxHealth: 50, mesh: null
+    });
+    Game.resources.food = 2;
+    Game.resources.water = 2;
+    Game.resolveUnstoredSpoilage();
+    var bareFoodLossFixture = 2 - Game.resources.food;
+
+    Game.raft.grid.clear();
+    Game.raft.grid.set('0,0', {
+      buildingKey: 'infirmary', health: 48, maxHealth: 48, mesh: null
+    });
+    Game.raft.grid.set('1,0', {
+      buildingKey: 'bunk', health: 45, maxHealth: 45, mesh: null
+    });
+    Game.raft.grid.set('2,0', {
+      buildingKey: 'beacon', health: 42, maxHealth: 42, mesh: null
+    });
+    var restedCrewFixture = new Survivor();
+    restedCrewFixture.stress = 50;
+    var jealousCrewFixture = new Survivor();
+    jealousCrewFixture.stress = 50;
+    var unhousedCrewFixture = new Survivor();
+    unhousedCrewFixture.stress = 50;
+    CrewManager.members = [
+      restedCrewFixture, jealousCrewFixture, unhousedCrewFixture
+    ];
+    Game.player.health = 100;
+    Game.player.morale = 75;
+    Game.infectionDays = 3;
+    Game.beaconLit = true;
+    Game.resources.fuel = 1;
+    Game.victoryCondition = 'radio';
+    Game.rescuedSignal = 0;
+    Game.storm = false;
+    Game.applyDailyBuildingEffects([]);
+  `);
+  assert.ok(run('preservedFoodLossFixture') < run('bareFoodLossFixture'));
+  assert.equal(run('Game.infectionDays'), 1);
+  assert.equal(run('Game.player.health'), 98);
+  assert.ok(Math.abs(run('Game.resources.fuel') - 0.65) < 1e-9);
+  assert.equal(run('Game.rescuedSignal'), 4);
+  assert.equal(run('restedCrewFixture.stress'), 43);
+  assert.equal(run('jealousCrewFixture.stress'), 43);
+  assert.equal(run('unhousedCrewFixture.stress'), 54);
+});
+
 test('hambre y sed representan reservas y la automatización no cubre una persona', () => {
   resetRaft([['0,0', 'net', 35], ['1,0', 'purifier', 40]]);
   run(`
@@ -1064,7 +1246,7 @@ test('guardar durante una crisis restaura pelea, objetivo y resumen pendiente', 
     Game.pendingDaySummary = {
       food: 1,
       water: 1.3,
-      events: ['heat', 'evento-inválido'],
+      events: ['heat', 'fire', 'evento-inválido'],
       crewNotes: ['Nota pendiente']
     };
     var activeConflictSaveFixture = Game.getSaveData();
@@ -1076,7 +1258,7 @@ test('guardar durante una crisis restaura pelea, objetivo y resumen pendiente', 
   assert.equal(run('Game.crewConflict.tension'), 37);
   assert.equal(run('Game.crewConflict.timeLeft'), 4.5);
   assert.equal(run('Game.pendingDaySummary.crewNotes[0]'), 'Nota pendiente');
-  assert.equal(run('Game.pendingDaySummary.events.length'), 1);
+  assert.equal(run('Game.pendingDaySummary.events.length'), 2);
   assert.equal(run('Game.paused'), true);
   run('Game.closeAllModals();');
 });
@@ -1239,7 +1421,163 @@ test('supervivencia diaria, recuperación y autoguardado', () => {
   assert.equal(run('Game.player.morale'), 65);
 });
 
+test('los once sucesos nuevos ofrecen decisiones, persisten y resuelven consecuencias', () => {
+  resetRaft([['0,0', 'floor', 50]]);
+  run(`
+    Game.pickDailyEvents = dailyEventsFixture;
+    var decisionDefinitionsFixture = DECISION_EVENT_KEYS.map(key => ({
+      key,
+      definition: Game.getDecisionEventDefinition(key)
+    }));
+    var everyDecisionDefinedFixture = decisionDefinitionsFixture.every(item =>
+      item.definition &&
+      item.definition.title &&
+      item.definition.text &&
+      item.definition.options.length >= 2
+    );
+
+    Game.state = 'playing';
+    CrewManager.members = [];
+    Game.resources = {
+      wood: 0, plastic: 0, cloth: 0, metal: 0,
+      rope: 0, food: 2, water: 2, fuel: 0
+    };
+    Game.resetPlayerState({ health: 100, morale: 75, sanity: 100 });
+    Game.infectionDays = 0;
+    Game.pendingDayResolution = {
+      food: 1,
+      water: 1.3,
+      events: ['contaminatedWater'],
+      crewNotes: [],
+      decisions: ['contaminatedWater'],
+      conflictMemberIndex: -1,
+      conflictCause: ''
+    };
+    var decisionSaveFixture = Game.getSaveData();
+    Game.loadFromSave(decisionSaveFixture);
+    var restoredDecisionFixture =
+      Game.pendingDayResolution.decisions[0];
+    Game.state = 'playing';
+    var eventSummaryFixture = Game.showDaySummary;
+    var eventSummaryShownFixture = false;
+    Game.showDaySummary = () => { eventSummaryShownFixture = true; };
+    Game.resumePendingDayResolution();
+    var eventButtonCountFixture =
+      document.getElementById('decision-buttons').children.length;
+    document.getElementById('decision-buttons').children[0].onclick();
+    Game.showDaySummary = eventSummaryFixture;
+
+    var eventRandomRestoreFixture = Math.random;
+    Math.random = () => 0;
+    Game.zone = 'calm';
+    CrewManager.members = [];
+    var generatedDecisionEventsFixture = Game.pickDailyEvents();
+    Math.random = eventRandomRestoreFixture;
+
+    Game.resources.food = 2;
+    Game.resources.water = 2;
+    var rescuedBeforeFlareFixture = Game.stats.rescued;
+    var crewBeforeFlareFixture = CrewManager.members.length;
+    var flareResultFixture =
+      Game.applyDecisionEventOutcome('distressFlare', 'rescue');
+  `);
+  assert.equal(run('DECISION_EVENT_KEYS.length'), 11);
+  assert.equal(run('everyDecisionDefinedFixture'), true);
+  assert.equal(run('restoredDecisionFixture'), 'contaminatedWater');
+  assert.equal(run('eventButtonCountFixture'), 2);
+  assert.equal(run('Game.pendingDayResolution'), null);
+  assert.equal(run('Game.infectionDays'), 3);
+  assert.equal(run('Game.resources.water'), 0.7);
+  assert.equal(run('eventSummaryShownFixture'), true);
+  assert.equal(
+    run("generatedDecisionEventsFixture.includes('contaminatedWater')"),
+    true
+  );
+  assert.equal(
+    run('CrewManager.members.length'),
+    run('crewBeforeFlareFixture + 1')
+  );
+  assert.equal(
+    run('Game.stats.rescued'),
+    run('rescuedBeforeFlareFixture + 1')
+  );
+  assert.match(run('flareResultFixture'), /Rescataste/);
+});
+
+test('todas las respuestas de eventos mantienen un estado finito y jugable', () => {
+  run(`
+    Game.raft.grid.clear();
+    [
+      'floor', 'lookout', 'smokehouse', 'armor', 'anchor', 'bunk',
+      'fire', 'sail', 'rudder', 'harpoon', 'infirmary', 'chart',
+      'beacon', 'containment', 'radio'
+    ].forEach((buildingKey, index) => {
+      Game.raft.grid.set(index + ',0', {
+        buildingKey,
+        health: BUILDINGS[buildingKey].health,
+        maxHealth: BUILDINGS[buildingKey].health,
+        mesh: null
+      });
+    });
+    Game.resetPlayerState({
+      x: 1, z: 1, health: 100, hunger: 90, thirst: 90,
+      morale: 75, stamina: 100, sanity: 100
+    });
+    Game.resources = {
+      wood: 99, plastic: 99, cloth: 99, metal: 99,
+      rope: 99, food: 99, water: 99, fuel: 99
+    };
+    Game.stats = {
+      rescued: 0, abandoned: 0, gathered: 0,
+      maxRaftSize: 15, deathCause: ''
+    };
+    CrewManager.members = [new Survivor(), new Survivor()];
+    Game.state = 'playing';
+    Game.victoryCondition = null;
+    var eventOutcomeSnapshotFixture = Game.getSaveData();
+    var eventOutcomeFailuresFixture = [];
+    for (var eventKeyFixture of DECISION_EVENT_KEYS) {
+      Game.loadFromSave(eventOutcomeSnapshotFixture);
+      Game.state = 'playing';
+      var eventOptionsFixture =
+        Game.getDecisionEventDefinition(eventKeyFixture).options;
+      for (var eventOptionFixture of eventOptionsFixture) {
+        Game.loadFromSave(eventOutcomeSnapshotFixture);
+        Game.state = 'playing';
+        try {
+          var eventResultFixture = Game.applyDecisionEventOutcome(
+            eventKeyFixture,
+            eventOptionFixture.id
+          );
+          var finiteResourcesFixture = Object.values(Game.resources)
+            .every(Number.isFinite);
+          var finitePlayerFixture = [
+            'health', 'hunger', 'thirst', 'morale', 'stamina', 'sanity'
+          ].every(key => Number.isFinite(Game.player[key]));
+          if (!eventResultFixture || !finiteResourcesFixture ||
+              !finitePlayerFixture || Game.raft.totalArea() <= 0) {
+            eventOutcomeFailuresFixture.push(
+              eventKeyFixture + ':' + eventOptionFixture.id
+            );
+          }
+        } catch (error) {
+          eventOutcomeFailuresFixture.push(
+            eventKeyFixture + ':' + eventOptionFixture.id + ':' + error.message
+          );
+        }
+      }
+    }
+    Game.loadFromSave(eventOutcomeSnapshotFixture);
+    Game.state = 'playing';
+  `);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(run('eventOutcomeFailuresFixture'))),
+    []
+  );
+});
+
 test('eventos y rutas finales son alcanzables', () => {
+  resetRaft([['0,0', 'floor', 50]]);
   run(`
     Game.pickDailyEvents = dailyEventsFixture;
     Game.showDaySummary = dailySummaryFixture;

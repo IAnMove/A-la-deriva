@@ -61,6 +61,19 @@ run(`
   tintRaftFixture.tintDamaged(tintCellFixture);
   var repeatedCriticalMaterialFixture =
     tintCellFixture.mesh.getObjectByName('base').material;
+
+  var newStructureKeysFixture = [
+    'lookout', 'smokehouse', 'armor', 'anchor', 'bunk',
+    'harpoon', 'infirmary', 'chart', 'beacon', 'containment'
+  ];
+  var structureRaftFixture = new Raft();
+  structureRaftFixture.init(new THREE.Scene());
+  var allNewMeshesFixture = newStructureKeysFixture.every((key, index) => {
+    if (!structureRaftFixture.placeAt(index, 0, key, true)) return false;
+    var cell = structureRaftFixture.get(index, 0);
+    var structure = cell.mesh.getObjectByName('structure');
+    return !!structure && structure.children.length > 0;
+  });
 `);
 
 assert.equal(THREE.REVISION, '149');
@@ -78,6 +91,7 @@ assert.equal(
   run('moderateMaterialFixture !== criticalMaterialFixture'),
   true
 );
+assert.equal(run('allNewMeshesFixture'), true);
 assert.equal(
   run('moderateMaterialFixture.userData.sharedRaftMaterial'),
   true

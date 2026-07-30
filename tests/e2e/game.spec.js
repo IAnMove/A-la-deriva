@@ -20,6 +20,56 @@ test('arranca sin red gracias a Three local y crea una partida', async ({ page }
   expect(errors).toEqual([]);
 });
 
+test('muestra función y contrapartida de las nuevas construcciones', async ({ page }) => {
+  const errors = await openOffline(page);
+  await page.locator('#btn-new-game').click();
+  await page.locator('#btn-build').click();
+  await expect(page.locator('#build-list')).toContainText('Torre de vigía');
+  await expect(page.locator('#build-list')).toContainText('Alarga el aviso');
+  await expect(page.locator('#build-list')).toContainText('Ahumadero');
+  await page.locator('#build-tabs [data-tab="advanced"]').click();
+  await expect(page.locator('#build-list')).toContainText('Arponera');
+  await expect(page.locator('#build-list')).toContainText('Permite disparar');
+  await expect(page.locator('#build-list')).toContainText('Celda de contención');
+  expect(errors).toEqual([]);
+});
+
+test('persiste y resuelve una decisión diaria pendiente', async ({ page }) => {
+  const errors = await openOffline(page);
+  await page.locator('#btn-new-game').click();
+  await page.evaluate(() => {
+    Game.resources.water = 2;
+    Game.pendingDayResolution = {
+      food: 1,
+      water: 1.3,
+      events: ['contaminatedWater'],
+      crewNotes: [],
+      decisions: ['contaminatedWater'],
+      conflictMemberIndex: -1,
+      conflictCause: ''
+    };
+    Save.save(Game.getSaveData());
+  });
+  await page.reload();
+  await page.locator('#btn-continue').click();
+  await expect(page.locator('#decision-title')).toHaveText('Agua contaminada');
+  await page.getByRole('button', { name: /Guardar.*beber/ }).click();
+  await expect(page.locator('#day-summary')).toBeVisible();
+  const result = await page.evaluate(() => ({
+    infectionDays: Game.infectionDays,
+    pending: Game.pendingDayResolution,
+    storedPending: JSON.parse(
+      localStorage.getItem('aladeriva3d_save_v4')
+    ).pendingDayResolution
+  }));
+  expect(result).toEqual({
+    infectionDays: 3,
+    pending: null,
+    storedPending: null
+  });
+  expect(errors).toEqual([]);
+});
+
 test('migra un guardado v1 y conserva la continuación', async ({ page }) => {
   const errors = await openOffline(page);
   await page.evaluate(() => {
@@ -37,8 +87,8 @@ test('migra un guardado v1 y conserva la continuación', async ({ page }) => {
   await expect(page.locator('#btn-continue')).toBeEnabled();
   await page.locator('#btn-continue').click();
   await expect(page.locator('#day-label')).toContainText('Día 3');
-  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('aladeriva3d_save_v3')));
-  expect(saved.schemaVersion).toBe(3);
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('aladeriva3d_save_v4')));
+  expect(saved.schemaVersion).toBe(4);
   expect(await page.evaluate(() => localStorage.getItem('aladeriva3d_save_v1'))).toBeNull();
   expect(errors).toEqual([]);
 });
@@ -52,8 +102,8 @@ test('autoguarda al ocultar la página y tolera preferencias dañadas', async ({
   await page.reload();
   await page.locator('#btn-new-game').click();
   await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide')));
-  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('aladeriva3d_save_v3')));
-  expect(saved.schemaVersion).toBe(3);
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('aladeriva3d_save_v4')));
+  expect(saved.schemaVersion).toBe(4);
   expect(saved.day).toBe(1);
   expect(errors).toEqual([]);
 });
@@ -189,14 +239,14 @@ test('protege un guardado futuro sin sustituirlo por el legacy', async ({ page }
   const legacyRaw = '{"day":4,"resources":{"wood":8}}';
   await page.evaluate(({ futureRaw, legacyRaw }) => {
     localStorage.clear();
-    localStorage.setItem('aladeriva3d_save_v3', futureRaw);
+    localStorage.setItem('aladeriva3d_save_v4', futureRaw);
     localStorage.setItem('aladeriva3d_save_v1', legacyRaw);
   }, { futureRaw, legacyRaw });
   await page.reload();
   await expect(page.locator('#btn-continue')).toBeDisabled();
   await expect(page.locator('#btn-continue')).toContainText('versión más reciente');
   const stored = await page.evaluate(() => ({
-    current: localStorage.getItem('aladeriva3d_save_v3'),
+    current: localStorage.getItem('aladeriva3d_save_v4'),
     legacy: localStorage.getItem('aladeriva3d_save_v1')
   }));
   expect(stored).toEqual({ current: futureRaw, legacy: legacyRaw });

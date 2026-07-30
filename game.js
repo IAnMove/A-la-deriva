@@ -12,6 +12,17 @@ const ZONES = [
   'polluted', 'reef', 'calm', 'ship'
 ];
 
+const DECISION_EVENT_KEYS = Object.freeze([
+  'fire', 'contaminatedWater', 'sealedContainer', 'ghostShip',
+  'fishMigration', 'current', 'outbreak', 'mutiny', 'whale',
+  'distressFlare', 'gulls'
+]);
+
+const DAILY_EVENT_KEYS = Object.freeze([
+  'storm', 'shark', 'sick', 'argument', 'lost', 'gift', 'debris',
+  'heat', 'wave', 'bird', 'ship', ...DECISION_EVENT_KEYS
+]);
+
 const Game = {
   state: 'start', // start, playing, paused, end
   paused: false,
@@ -68,9 +79,13 @@ const Game = {
   worldOffset: 0,
   worldOffsetZ: 0,
   hallucinationTimer: 0,
+  infectionDays: 0,
+  anchorDeployed: false,
+  beaconLit: false,
   fishing: { active: false },
   crewConflict: { active: false },
   pendingDaySummary: null,
+  pendingDayResolution: null,
 
   // Meshes auxiliares
   ghostMesh: null,
@@ -218,6 +233,10 @@ const Game = {
     Game.navigationHeading = 0;
     Game.worldOffset = 0;
     Game.worldOffsetZ = 0;
+    Game.infectionDays = 0;
+    Game.anchorDeployed = false;
+    Game.beaconLit = false;
+    Game.pendingDayResolution = null;
     Game.resetTransientState();
     Game.highlightsDirty = true;
 
@@ -258,6 +277,7 @@ const Game = {
       return false;
     }
     Game.setState('playing');
+    Game.resumePendingDayResolution();
     return true;
   },
 
@@ -318,6 +338,13 @@ const Game = {
       -NAVIGATION_BALANCE.maxHeading,
       NAVIGATION_BALANCE.maxHeading
     );
+    Game.infectionDays = Util.clamp(
+      Math.floor(finite(data.infectionDays)),
+      0,
+      14
+    );
+    Game.anchorDeployed = data.anchorDeployed === true;
+    Game.beaconLit = data.beaconLit === true;
 
     // Reconstruir balsa con meshes
     for (const cell of Game.raft.grid.values()) Game.raft.disposeMesh(cell);
@@ -348,6 +375,8 @@ const Game = {
     }
     if (Game.raft.grid.size === 0) Game.raft.placeAt(0, 0, 'floor', true);
     Game.raft.removeDetachedCells();
+    if (Game.raft.countProvides('anchor') <= 0) Game.anchorDeployed = false;
+    if (Game.raft.countProvides('beacon') <= 0) Game.beaconLit = false;
     Game.ensurePlayerOnRaft();
     CrewManager.reset();
     CrewManager.members = (Array.isArray(data.crew) ? data.crew : [])
@@ -364,6 +393,7 @@ const Game = {
     Game.closeAllModals();
     Game.resetTransientState();
     Game.restoreSavedConflict(data);
+    if (!Game.crewConflict.active) Game.restorePendingDayResolution(data);
     Game.highlightsDirty = true;
     Log.add('Partida cargada.');
   },
@@ -414,10 +444,7 @@ const Game = {
             ? summary.events
                 .slice(0, 12)
                 .map(String)
-                .filter(event => [
-                  'storm', 'shark', 'sick', 'argument', 'lost', 'gift',
-                  'debris', 'heat', 'wave', 'bird', 'ship'
-                ].includes(event))
+                .filter(event => DAILY_EVENT_KEYS.includes(event))
             : [],
           crewNotes: Array.isArray(summary.crewNotes)
             ? summary.crewNotes
@@ -433,7 +460,44 @@ const Game = {
     return true;
   },
 
+  restorePendingDayResolution: (data) => {
+    const saved = data?.pendingDayResolution;
+    if (!saved || typeof saved !== 'object') return false;
+    const finite = (value, fallback = 0) => {
+      const number = Number(value);
+      return Number.isFinite(number) ? number : fallback;
+    };
+    const decisions = Array.isArray(saved.decisions)
+      ? saved.decisions
+          .slice(0, 8)
+          .map(String)
+          .filter(event => DECISION_EVENT_KEYS.includes(event))
+      : [];
+    const events = Array.isArray(saved.events)
+      ? saved.events
+          .slice(0, 16)
+          .map(String)
+          .filter(event => DAILY_EVENT_KEYS.includes(event))
+      : [];
+    const memberIndex = Number(saved.conflictMemberIndex);
+    Game.pendingDayResolution = {
+      food: Util.clamp(finite(saved.food), 0, 1000000),
+      water: Util.clamp(finite(saved.water), 0, 1000000),
+      events,
+      crewNotes: Array.isArray(saved.crewNotes)
+        ? saved.crewNotes.slice(0, 100).map(note => String(note).slice(0, 500))
+        : [],
+      decisions,
+      conflictMemberIndex: Number.isInteger(memberIndex) ? memberIndex : -1,
+      conflictCause: typeof saved.conflictCause === 'string'
+        ? saved.conflictCause.slice(0, 160)
+        : ''
+    };
+    return true;
+  },
+
   getSaveData: () => {
+    Game.syncStructureStates();
     const conflict = Game.crewConflict?.active
       ? {
           active: true,
@@ -477,6 +541,35 @@ const Game = {
             : []
         }
       : null;
+    const pendingDayResolution = Game.pendingDayResolution
+      ? {
+          food: Math.max(0, Number(Game.pendingDayResolution.food) || 0),
+          water: Math.max(0, Number(Game.pendingDayResolution.water) || 0),
+          events: Array.isArray(Game.pendingDayResolution.events)
+            ? Game.pendingDayResolution.events
+                .slice(0, 16)
+                .filter(event => DAILY_EVENT_KEYS.includes(event))
+            : [],
+          crewNotes: Array.isArray(Game.pendingDayResolution.crewNotes)
+            ? Game.pendingDayResolution.crewNotes
+                .slice(0, 100)
+                .map(note => String(note).slice(0, 500))
+            : [],
+          decisions: Array.isArray(Game.pendingDayResolution.decisions)
+            ? Game.pendingDayResolution.decisions
+                .slice(0, 8)
+                .filter(event => DECISION_EVENT_KEYS.includes(event))
+            : [],
+          conflictMemberIndex: Number.isInteger(
+            Game.pendingDayResolution.conflictMemberIndex
+          )
+            ? Game.pendingDayResolution.conflictMemberIndex
+            : -1,
+          conflictCause: String(
+            Game.pendingDayResolution.conflictCause || ''
+          ).slice(0, 160)
+        }
+      : null;
     return {
       day: Game.day,
       time: Game.time,
@@ -500,11 +593,15 @@ const Game = {
       crew: CrewManager.members.map(m => ({ ...m, mesh: null })),
       crewConflict: conflict,
       pendingDaySummary,
+      pendingDayResolution,
       rescuedSignal: Game.rescuedSignal,
       islandDistance: Game.islandDistance,
       radioIntel: Game.radioIntel,
       navigationIntel: Game.navigationIntel,
       navigationHeading: Game.navigationHeading,
+      infectionDays: Game.infectionDays,
+      anchorDeployed: Game.anchorDeployed,
+      beaconLit: Game.beaconLit,
       victoryCondition: Game.victoryCondition,
       currentObjective: Game.currentObjective,
       worldOffset: Game.worldOffset,
@@ -546,6 +643,15 @@ const Game = {
     Game.raft.selected = null;
     Game.setState('start');
     return true;
+  },
+
+  syncStructureStates: () => {
+    if (Game.anchorDeployed && Game.raft.countProvides('anchor') <= 0) {
+      Game.anchorDeployed = false;
+    }
+    if (Game.beaconLit && Game.raft.countProvides('beacon') <= 0) {
+      Game.beaconLit = false;
+    }
   },
 
   bindUI: () => {
@@ -1463,6 +1569,14 @@ const Game = {
   },
 
   updateEntities: (dt) => {
+    if (Game.anchorDeployed && Game.raft.countProvides('anchor') <= 0) {
+      Game.anchorDeployed = false;
+      Log.add('El ancla dejó de sujetar la balsa al quedar inoperativa.');
+    }
+    if (Game.beaconLit && Game.raft.countProvides('beacon') <= 0) {
+      Game.beaconLit = false;
+      Log.add('El faro de señales se apagó al quedar inoperativo.');
+    }
     const driftBonus = CrewManager.getDriftBonus();
     const sailEfficiency = Util.clamp(Game.raft.countProvides('sail'), 0, 1);
     const rudderEfficiency = Util.clamp(Game.raft.countProvides('rudder'), 0, 1);
@@ -1473,10 +1587,16 @@ const Game = {
       ? motorEfficiency
       : 0;
     const loadMul = Game.loadSpeedMultiplier();
-    const currentSpeed = (0.75 + driftBonus * 0.75 + sailBonus + motorBonus + Game.rowingBoost) * loadMul;
+    const anchored = Game.anchorDeployed &&
+      Game.raft.countProvides('anchor') > 0;
+    const currentSpeed = anchored
+      ? 0
+      : (0.75 + driftBonus * 0.75 + sailBonus + motorBonus + Game.rowingBoost) * loadMul;
     const steeringSpeed = (sailBonus + motorBonus) * rudderEfficiency *
       Game.navigationHeading * NAVIGATION_BALANCE.lateralSteering;
-    const currentSpeedZ = (Game.rowingBoostZ + steeringSpeed) * loadMul;
+    const currentSpeedZ = anchored
+      ? 0
+      : (Game.rowingBoostZ + steeringSpeed) * loadMul;
     Game.worldOffset += currentSpeed * dt;
     Game.worldOffsetZ += currentSpeedZ * dt;
 
@@ -1596,7 +1716,12 @@ const Game = {
       AudioSys.play('shark-bite');
     } else {
       const damage = 20 + Math.min(18, Game.day * 0.8);
-      const dealt = Game.raft.takeDamage(damage, danger.x, danger.z);
+      const dealt = Game.raft.takeDamage(
+        damage,
+        danger.x,
+        danger.z,
+        'shark'
+      );
       Game.reportDetachedModules();
       Game.showEventMessage(
         `Esquivaste al tiburón, pero golpeó la balsa (-${Math.floor(dealt)})`
@@ -1628,7 +1753,12 @@ const Game = {
     reef.hit = true;
     reef.active = false;
     const damage = 55 + Math.min(25, Game.day * 1.5);
-    const dealt = Game.raft.takeDamage(damage, reef.x, reef.z);
+    const dealt = Game.raft.takeDamage(
+      damage,
+      reef.x,
+      reef.z,
+      'reef'
+    );
     Game.reportDetachedModules();
     Game.highlightsDirty = true;
     Game.showEventMessage(
@@ -1722,6 +1852,7 @@ const Game = {
             Game.resources[k] = (Game.resources[k] || 0) + Math.max(0, Math.floor(v * 0.5));
           }
           Game.showFloatingText(p.x, p.z, `${b.name} desmontado`);
+          Game.syncStructureStates();
           AudioSys.play('build');
           Game.highlightsDirty = true;
           Game.updateBuildMenu();
@@ -1772,16 +1903,113 @@ const Game = {
       } else {
         Game.showFloatingText(p.x, p.z, 'No tienes comida', '#ef5350');
       }
-    } else if (b.key === 'medkit') {
-      if (Game.resources.cloth >= 1 && Game.player.health < 100) {
+    } else if (b.key === 'smokehouse') {
+      if (Game.resources.food >= 1 && Game.resources.fuel >= 0.2) {
+        Game.resources.food -= 1;
+        Game.resources.fuel -= 0.2;
+        Game.player.foodCredit = Math.min(
+          SURVIVAL_BALANCE.playerFoodNeed,
+          (Game.player.foodCredit || 0) + efficiency
+        );
+        Game.player.morale = Math.min(100, Game.player.morale + 3);
+        Game.showFloatingText(p.x, p.z, 'Pescado ahumado y conservado');
+        Log.add('El ahumadero convirtió una ración en comida segura para la jornada.');
+        AudioSys.play('collect');
+      } else {
+        Game.showFloatingText(
+          p.x,
+          p.z,
+          Game.resources.food < 1
+            ? 'Necesitas 1 de comida'
+            : 'Necesitas 0,2 de combustible',
+          '#ef5350'
+        );
+      }
+    } else if (b.key === 'medkit' || b.key === 'infirmary') {
+      const isInfirmary = b.key === 'infirmary';
+      if (isInfirmary && Game.infectionDays > 0 &&
+          Game.resources.cloth >= 1 && Game.resources.water >= 0.5) {
         Game.resources.cloth -= 1;
-        const healing = Math.round(25 * efficiency);
+        Game.resources.water -= 0.5;
+        Game.infectionDays = 0;
+        Game.player.health = Math.min(100, Game.player.health + 12 * efficiency);
+        Game.showFloatingText(p.x, p.z, 'Infección tratada', '#66bb6a');
+        Log.add('La enfermería detuvo la infección.');
+        AudioSys.play('collect');
+      } else if (Game.resources.cloth >= 1 && Game.player.health < 100) {
+        Game.resources.cloth -= 1;
+        const healing = Math.round((isInfirmary ? 34 : 25) * efficiency);
         Game.player.health = Math.min(100, Game.player.health + healing);
         Game.showFloatingText(p.x, p.z, `+${healing} salud`);
         AudioSys.play('collect');
+      } else if (isInfirmary && Game.infectionDays > 0) {
+        Game.showFloatingText(p.x, p.z, 'Necesitas 1 tela y 0,5 de agua', '#ef5350');
       } else {
         Game.showFloatingText(p.x, p.z, Game.player.health >= 100 ? 'Ya estás sano' : 'Necesitas 1 tela', '#ef5350');
       }
+    } else if (b.key === 'anchor') {
+      Game.anchorDeployed = !Game.anchorDeployed;
+      const state = Game.anchorDeployed ? 'desplegada' : 'recogida';
+      Game.showFloatingText(p.x, p.z, `Ancla ${state}`, '#4fc3f7');
+      Log.add(`El ancla queda ${state}.`);
+      Save.save(Game.getSaveData());
+    } else if (b.key === 'beacon') {
+      if (!Game.beaconLit && Game.resources.fuel < 0.25) {
+        Game.showFloatingText(p.x, p.z, 'Necesitas combustible para encenderlo', '#ef5350');
+      } else {
+        Game.beaconLit = !Game.beaconLit;
+        Game.showFloatingText(
+          p.x,
+          p.z,
+          Game.beaconLit ? 'Faro encendido' : 'Faro apagado',
+          Game.beaconLit ? '#ffca28' : '#90a4ae'
+        );
+        Log.add(`El faro de señales queda ${Game.beaconLit ? 'encendido' : 'apagado'}.`);
+        Save.save(Game.getSaveData());
+      }
+    } else if (b.key === 'harpoon') {
+      const danger = (EntityManager.dangers || [])
+        .filter(candidate => candidate.active && candidate.state !== 'flee')
+        .sort((a, c) =>
+          Util.dist2(p.x, p.z, a.x, a.z) -
+          Util.dist2(p.x, p.z, c.x, c.z)
+        )[0];
+      if (!danger || Util.dist2(p.x, p.z, danger.x, danger.z) > 12) {
+        Game.showFloatingText(p.x, p.z, 'No hay tiburones al alcance', '#90a4ae');
+      } else {
+        const hunted = danger.state === 'charge' ||
+          Util.dist2(p.x, p.z, danger.x, danger.z) < 6;
+        danger.scareFrom?.(p.x, p.z);
+        if (hunted) Game.resources.food += 0.5 * efficiency;
+        cell.health = Math.max(1, cell.health - 6);
+        Game.raft.tintDamaged(cell);
+        Game.showFloatingText(
+          p.x,
+          p.z,
+          hunted ? 'Tiburón repelido · +0,5 comida' : 'Tiburón ahuyentado',
+          '#ffca28'
+        );
+        Log.add('La arponera hizo huir a un tiburón.');
+        AudioSys.play('shark-repel');
+      }
+    } else if (b.key === 'chart') {
+      const route = Game.victoryCondition === 'island'
+        ? `Isla a ${Math.max(0, Game.islandDistance).toFixed(0)} m.`
+        : 'Aún no has fijado una ruta a tierra.';
+      Game.showFloatingText(p.x, p.z, route, '#4fc3f7');
+      Log.add(`La mesa de navegación confirma el rumbo. ${route}`);
+    } else if (b.key === 'containment') {
+      const restrained = CrewManager.members.filter(member =>
+        member.alive && member.restrainedDays > 0
+      ).length;
+      Game.showFloatingText(
+        p.x,
+        p.z,
+        restrained > 0
+          ? `${restrained} tripulante(s) bajo vigilancia`
+          : 'Celda preparada · la tripulación desconfía',
+        restrained > 0 ? '#ffca28' : '#90a4ae'
+      );
     } else if (b.key === 'radio') {
       Game.offerRadioRoute();
     } else if (b.key === 'sail') {
@@ -1830,6 +2058,139 @@ const Game = {
     }
   },
 
+  applyDailyBuildingEffects: (crewNotes = []) => {
+    const note = (text) => {
+      crewNotes.push(text);
+      Log.add(text);
+    };
+    const infirmary = Util.clamp(
+      Game.raft.countProvides('infirmary'),
+      0,
+      2
+    );
+    if (Game.infectionDays > 0) {
+      const damage = infirmary > 0 ? 2 : 7;
+      Game.player.health = Math.max(0, Game.player.health - damage);
+      Game.infectionDays = Math.max(
+        0,
+        Game.infectionDays - (infirmary > 0 ? 2 : 1)
+      );
+      note(
+        infirmary > 0
+          ? `La enfermería contiene la infección (-${damage} salud).`
+          : `La infección empeora (-${damage} salud, ${Game.infectionDays} día(s) restantes).`
+      );
+    }
+
+    if (infirmary > 0) {
+      const injured = CrewManager.members
+        .filter(member => member.alive && member.health < 100)
+        .sort((a, b) => a.health - b.health)[0];
+      if (injured) {
+        const healed = Math.min(100 - injured.health, 4 * infirmary);
+        injured.health += healed;
+        note(`La enfermería atendió a ${injured.name} (+${healed.toFixed(0)} salud).`);
+      }
+    }
+
+    const bunks = Math.floor(Game.raft.countProvides('bunk'));
+    const aliveCrew = CrewManager.members.filter(member => member.alive);
+    for (let index = 0; index < aliveCrew.length; index++) {
+      const member = aliveCrew[index];
+      if (index < bunks) {
+        member.stress = Math.max(0, member.stress - 7);
+        member.morale = Math.min(100, member.morale + 3);
+      } else if (bunks > 0) {
+        member.stress = Math.min(100, member.stress + 4);
+        member.morale = Math.max(0, member.morale - 3);
+      }
+    }
+    if (bunks > 0 && aliveCrew.length > bunks) {
+      note('Faltan literas para toda la tripulación; aparecen celos y tensión.');
+    }
+
+    const containment = Game.raft.countProvides('containment');
+    if (containment > 0) {
+      const crisisAboard = aliveCrew.some(member =>
+        member.hostile || member.restrainedDays > 0
+      );
+      if (crisisAboard) {
+        for (const member of aliveCrew) {
+          if (member.restrainedDays > 0) {
+            member.stress = Math.max(0, member.stress - 6 * containment);
+          }
+        }
+      } else {
+        Game.player.morale = Math.max(0, Game.player.morale - containment);
+        for (const member of aliveCrew) {
+          member.trust = Math.max(0, member.trust - containment);
+        }
+        note('La celda vacía inquieta a la tripulación y reduce su confianza.');
+      }
+    }
+
+    if (Game.beaconLit) {
+      const beacon = Util.clamp(
+        Game.raft.countProvides('beacon'),
+        0,
+        1.5
+      );
+      const fuelNeeded = 0.35;
+      if (beacon <= 0 || Game.resources.fuel < fuelNeeded) {
+        Game.beaconLit = false;
+        note('El faro de señales se apaga por falta de combustible.');
+      } else {
+        Game.resources.fuel -= fuelNeeded;
+        if (Game.victoryCondition === 'radio') {
+          Game.rescuedSignal = Math.min(
+            100,
+            Game.rescuedSignal + 4 * beacon
+          );
+        } else {
+          Game.radioIntel = Math.min(40, Game.radioIntel + 2 * beacon);
+        }
+        note('El faro consume 0,35 de combustible y proyecta una señal sobre el mar.');
+      }
+    }
+
+    if (Game.anchorDeployed && Game.storm) {
+      const anchorEntry = Array.from(Game.raft.grid.entries())
+        .find(([, cell]) => cell.buildingKey === 'anchor');
+      if (anchorEntry) {
+        const [gx, gy] = anchorEntry[0].split(',').map(Number);
+        const position = Game.raft.getCellWorldPos(gx, gy);
+        const damage = Game.raft.takeDamage(
+          12,
+          position.x + Game.raft.cellSize * 0.5,
+          position.z + Game.raft.cellSize * 0.5,
+          'generic'
+        );
+        note(`La tormenta tensa el ancla y causa ${Math.floor(damage)} de daño.`);
+        if (Game.raft.countProvides('anchor') <= 0) {
+          Game.anchorDeployed = false;
+        }
+      }
+    }
+
+    if (Game.storm) {
+      const lookoutEntry = Array.from(Game.raft.grid.entries())
+        .find(([, cell]) => cell.buildingKey === 'lookout');
+      if (lookoutEntry) {
+        const [gx, gy] = lookoutEntry[0].split(',').map(Number);
+        const position = Game.raft.getCellWorldPos(gx, gy);
+        Game.raft.takeDamage(
+          7,
+          position.x + Game.raft.cellSize * 0.5,
+          position.z + Game.raft.cellSize * 0.5,
+          'generic'
+        );
+        note('El viento castiga la torre de vigía.');
+      }
+    }
+    Game.reportDetachedModules();
+    return crewNotes;
+  },
+
   endDay: () => {
     Game.day++;
     AudioSys.play('day');
@@ -1852,6 +2213,7 @@ const Game = {
     const supplyReport = Game.resolveDailySupplies();
     const foodConsumed = supplyReport.foodConsumed;
     const waterConsumed = supplyReport.waterConsumed;
+    Game.applyDailyBuildingEffects(crewNotes);
     if (Game.player.health <= 0) {
       Game.stats.deathCause = 'El personaje principal ha muerto';
       Game.triggerLose();
@@ -1885,11 +2247,44 @@ const Game = {
     Game.clampPlayerStats();
 
     const events = Game.pickDailyEvents();
-    for (const ev of events) Game.applyEvent(ev);
+    const decisions = [];
+    for (const ev of events) {
+      if (DECISION_EVENT_KEYS.includes(ev)) decisions.push(ev);
+      else Game.applyEvent(ev);
+    }
     Game.clampPlayerStats();
     Game.checkWinLose();
     if (Game.state !== 'playing') return;
     if (Game.checkRouteVictory()) return;
+    const conflictMemberIndex = behaviorReport.conflict
+      ? CrewManager.members.indexOf(behaviorReport.conflict.member)
+      : -1;
+    const resolution = {
+      food: foodConsumed,
+      water: waterConsumed,
+      events,
+      crewNotes: [...crewNotes],
+      decisions,
+      conflictMemberIndex,
+      conflictCause: behaviorReport.conflict?.cause || ''
+    };
+    if (decisions.length > 0) {
+      Game.pendingDayResolution = resolution;
+      Save.save(Game.getSaveData());
+      Game.resumePendingDayResolution();
+      return;
+    }
+    Game.finishDayResolution(resolution);
+  },
+
+  finishDayResolution: (resolution = Game.pendingDayResolution) => {
+    if (!resolution) return false;
+    Game.pendingDayResolution = null;
+    Game.syncStructureStates();
+    Game.clampPlayerStats();
+    Game.checkWinLose();
+    if (Game.state !== 'playing') return false;
+    if (Game.checkRouteVictory()) return true;
 
     const radioEfficiency = Util.clamp(Game.raft.countProvides('radio'), 0, 1);
     if (Game.victoryCondition === 'radio' && radioEfficiency > 0) {
@@ -1897,35 +2292,615 @@ const Game = {
       Game.rescuedSignal += (8 + mastBonus) * radioEfficiency;
       if (Game.rescuedSignal >= 100) {
         Game.triggerWin('radio');
-        return;
+        return true;
       }
     }
     if (Game.victoryCondition === 'island') {
       Game.resolveNavigationDay();
-      if (Game.state !== 'playing') return;
+      if (Game.state !== 'playing') return true;
     }
 
     Game.updateObjective();
-    if (behaviorReport.conflict) {
-      const started = Game.startCrewConflict(
-        behaviorReport.conflict.member,
-        behaviorReport.conflict.cause
+    const conflictMember = Number.isInteger(resolution.conflictMemberIndex)
+      ? CrewManager.members[resolution.conflictMemberIndex]
+      : null;
+    if (conflictMember) {
+      const alreadyContained =
+        conflictMember.restrainedDays > 0 || !conflictMember.alive;
+      const started = !alreadyContained && Game.startCrewConflict(
+        conflictMember,
+        resolution.conflictCause
       );
       if (started) {
         Game.pendingDaySummary = {
-          food: foodConsumed,
-          water: waterConsumed,
-          events,
-          crewNotes: [...crewNotes]
+          food: resolution.food,
+          water: resolution.water,
+          events: resolution.events,
+          crewNotes: [...resolution.crewNotes]
         };
         Save.save(Game.getSaveData());
-        return;
+        return true;
       }
-      behaviorReport.conflict.member.hostile = false;
+      conflictMember.hostile = false;
+      if (alreadyContained && conflictMember.alive) {
+        resolution.crewNotes.push(
+          `${conflictMember.name} quedó contenido antes de iniciar la crisis.`
+        );
+      }
       Game.pendingDaySummary = null;
     }
     Save.save(Game.getSaveData());
-    Game.showDaySummary(foodConsumed, waterConsumed, events, crewNotes);
+    Game.showDaySummary(
+      resolution.food,
+      resolution.water,
+      resolution.events,
+      resolution.crewNotes
+    );
+    return true;
+  },
+
+  resumePendingDayResolution: () => {
+    const pending = Game.pendingDayResolution;
+    if (!pending || Game.state !== 'playing') return false;
+    if (!Array.isArray(pending.decisions) || pending.decisions.length === 0) {
+      return Game.finishDayResolution(pending);
+    }
+    const eventKey = pending.decisions[0];
+    const definition = Game.getDecisionEventDefinition(eventKey);
+    if (!definition) {
+      pending.decisions.shift();
+      Save.save(Game.getSaveData());
+      return Game.resumePendingDayResolution();
+    }
+    Game.showDecision(
+      definition.title,
+      definition.text,
+      definition.options.map(option => ({
+        label: option.label,
+        action: () => Game.resolveDailyEventDecision(eventKey, option.id)
+      }))
+    );
+    return true;
+  },
+
+  resolveDailyEventDecision: (eventKey, optionId) => {
+    const pending = Game.pendingDayResolution;
+    if (!pending || pending.decisions?.[0] !== eventKey) return false;
+    const definition = Game.getDecisionEventDefinition(eventKey);
+    if (!definition?.options.some(option => option.id === optionId)) {
+      return false;
+    }
+    const result = Game.applyDecisionEventOutcome(eventKey, optionId);
+    pending.decisions.shift();
+    if (result) {
+      pending.crewNotes.push(result);
+      Log.add(result);
+      Game.showEventMessage(result);
+    }
+    Game.clampPlayerStats();
+    Game.checkWinLose();
+    if (Game.state !== 'playing') return true;
+    Save.save(Game.getSaveData());
+    return Game.resumePendingDayResolution();
+  },
+
+  getDecisionEventDefinition: (eventKey) => {
+    const has = key => Game.raft.countProvides(key) > 0;
+    const options = (...items) => items.filter(Boolean);
+    const definitions = {
+      fire: {
+        title: '¡Incendio a bordo!',
+        text: 'Las llamas pueden destruir un módulo y propagarse. Elige cómo sofocarlas.',
+        options: options(
+          Game.resources.water >= 1 && {
+            id: 'water',
+            label: 'Usar 1 de agua · daño mínimo'
+          },
+          {
+            id: 'cut',
+            label: 'Cortar el módulo en llamas · perder estructura'
+          },
+          {
+            id: 'smother',
+            label: 'Sofocarlo a mano · arriesgar salud'
+          }
+        )
+      },
+      contaminatedWater: {
+        title: 'Agua contaminada',
+        text: 'Encuentras un depósito turbio. Puede salvar las reservas o provocar una infección.',
+        options: options(
+          has('cook') && {
+            id: 'boil',
+            label: 'Hervirla · obtener 0,8 de agua segura'
+          },
+          {
+            id: 'drink',
+            label: 'Guardarla y beber · +1 agua, riesgo de infección'
+          },
+          { id: 'discard', label: 'Desecharla' }
+        )
+      },
+      sealedContainer: {
+        title: 'Contenedor sellado',
+        text: 'Una caja industrial golpea la balsa. Dentro se oyen piezas sueltas.',
+        options: options(
+          Game.resources.metal >= 1 && {
+            id: 'tools',
+            label: 'Gastar 1 metal y abrir con cuidado'
+          },
+          { id: 'force', label: 'Forzar la tapa · riesgo de heridas' },
+          { id: 'leave', label: 'Dejarla pasar' }
+        )
+      },
+      ghostShip: {
+        title: 'Barco fantasma',
+        text: 'Un casco abandonado deriva cerca. Hay suministros, pero también manchas y silencio.',
+        options: [
+          { id: 'explore', label: 'Explorar el interior · botín y riesgo' },
+          { id: 'salvage', label: 'Recoger restos desde fuera' },
+          { id: 'avoid', label: 'Mantener la distancia' }
+        ]
+      },
+      fishMigration: {
+        title: 'Migración de peces',
+        text: 'El agua hierve de peces durante unas horas. Detenerse da más comida, pero retrasa el viaje.',
+        options: options(
+          has('anchor') && {
+            id: 'stop',
+            label: 'Echar el ancla · +2,5 comida'
+          },
+          { id: 'moving', label: 'Pescar en marcha · +1 comida' },
+          { id: 'ignore', label: 'Mantener el rumbo' }
+        )
+      },
+      current: {
+        title: 'Corriente marina',
+        text: 'Una corriente fuerte puede acelerar la ruta o lanzar la balsa contra restos y arrecifes.',
+        options: options(
+          has('forecast') && has('rudder') && {
+            id: 'steer',
+            label: 'Leerla y gobernar · avance seguro'
+          },
+          has('anchor') && {
+            id: 'anchor',
+            label: 'Desplegar el ancla · resistir'
+          },
+          {
+            id: 'row',
+            label: 'Remar contra ella · agotamiento'
+          },
+          { id: 'ride', label: 'Dejarse llevar · mucho avance y daños' }
+        )
+      },
+      outbreak: {
+        title: 'Brote infeccioso',
+        text: 'La fiebre aparece entre la tripulación. Sin una respuesta rápida puede alcanzarte.',
+        options: options(
+          has('infirmary') &&
+            Game.resources.cloth >= 1 &&
+            Game.resources.water >= 0.5 && {
+              id: 'treat',
+              label: 'Enfermería · 1 tela y 0,5 agua'
+            },
+          has('containment') && {
+            id: 'isolate',
+            label: 'Aislar al enfermo · aumenta tensión'
+          },
+          Game.resources.food >= 0.5 &&
+            Game.resources.water >= 1 && {
+              id: 'care',
+              label: 'Cuidados básicos · 0,5 comida y 1 agua'
+            },
+          {
+            id: 'separate',
+            label: 'Separar a los enfermos con medios improvisados'
+          },
+          { id: 'ignore', label: 'Esperar · infección probable' }
+        )
+      },
+      mutiny: {
+        title: 'Conato de motín',
+        text: 'La tripulación cuestiona tus decisiones. La confianza y las reservas están en juego.',
+        options: options(
+          Game.resources.food >= 1 &&
+            Game.resources.water >= 1.3 && {
+              id: 'negotiate',
+              label: 'Compartir reservas · 1 comida y 1,3 agua'
+            },
+          (has('containment') || CrewManager.guardStrength() > 0) && {
+            id: 'contain',
+            label: 'Contener a los cabecillas'
+          },
+          {
+            id: 'appease',
+            label: 'Prometer cambios · perder autoridad'
+          },
+          { id: 'confront', label: 'Enfrentarte · riesgo de heridas' }
+        )
+      },
+      whale: {
+        title: 'Una ballena junto a la balsa',
+        text: 'La ballena remueve bancos de peces. Acercarse demasiado puede volcar módulos.',
+        options: options(
+          has('forecast') && {
+            id: 'follow',
+            label: 'Seguirla con la carta · comida y rumbo'
+          },
+          { id: 'approach', label: 'Acercarse a pescar · gran botín y golpe' },
+          { id: 'keep', label: 'Observar desde lejos' }
+        )
+      },
+      distressFlare: {
+        title: 'Llamarada de auxilio',
+        text: 'Alguien pide ayuda desde una pequeña balsa. Rescatarlo consume suministros.',
+        options: options(
+          Game.resources.food >= 1 &&
+            Game.resources.water >= 1.3 &&
+            CrewManager.members.length < CrewManager.MAX_MEMBERS && {
+              id: 'rescue',
+              label: 'Rescatar · 1 comida y 1,3 agua'
+            },
+          (has('beacon') || has('radio')) && {
+            id: 'signal',
+            label: 'Responder con señales'
+          },
+          CrewManager.members.length < CrewManager.MAX_MEMBERS && {
+            id: 'tow',
+            label: 'Remolcarlo sin reservas · riesgo físico'
+          },
+          { id: 'ignore', label: 'No desviarse' }
+        )
+      },
+      gulls: {
+        title: 'Bandada de gaviotas',
+        text: 'Las aves intentan robar comida, pero su dirección podría señalar tierra.',
+        options: options(
+          (has('lookout') || has('forecast')) && {
+            id: 'follow',
+            label: 'Seguir la bandada · buscar tierra'
+          },
+          { id: 'protect', label: 'Proteger las reservas' },
+          { id: 'trap', label: 'Improvisar una trampa · comida y moral' }
+        )
+      }
+    };
+    return definitions[eventKey] || null;
+  },
+
+  applyDecisionEventOutcome: (eventKey, optionId) => {
+    const damageAtBuilding = (keys, amount, type = 'generic') => {
+      const entry = Array.from(Game.raft.grid.entries())
+        .find(([, cell]) => keys.includes(cell.buildingKey));
+      const healthBefore = Array.from(Game.raft.grid.values())
+        .reduce((sum, cell) => sum + Math.max(0, cell.health), 0);
+      if (!entry) {
+        Game.raft.takeDamage(amount, null, null, type);
+      } else {
+        const [gx, gy] = entry[0].split(',').map(Number);
+        const position = Game.raft.getCellWorldPos(gx, gy);
+        Game.raft.takeDamage(
+          amount,
+          position.x + Game.raft.cellSize * 0.5,
+          position.z + Game.raft.cellSize * 0.5,
+          type
+        );
+      }
+      const healthAfter = Array.from(Game.raft.grid.values())
+        .reduce((sum, cell) => sum + Math.max(0, cell.health), 0);
+      return Math.max(0, healthBefore - healthAfter);
+    };
+    const healthiestCrew = () => CrewManager.members
+      .filter(member => member.alive)
+      .sort((a, b) => b.health - a.health)[0];
+    const mostStressedCrew = () => CrewManager.members
+      .filter(member => member.alive)
+      .sort((a, b) => b.stress - a.stress)[0];
+
+    if (eventKey === 'fire') {
+      if (optionId === 'water') {
+        Game.resources.water -= 1;
+        const spottedEarly = Game.raft.countProvides('lookout') > 0;
+        const damage = damageAtBuilding(
+          ['fire', 'kitchen', 'smokehouse', 'lookout', 'sail', 'bunk'],
+          spottedEarly ? 2 : 4,
+          'fire'
+        );
+        return `El agua apaga el incendio; las llamas causan ${Math.floor(damage)} de daño.`;
+      }
+      if (optionId === 'cut') {
+        const damage = damageAtBuilding(
+          ['fire', 'kitchen', 'smokehouse', 'lookout', 'sail', 'bunk'],
+          999,
+          'fire'
+        );
+        Game.reportDetachedModules();
+        return `Cortaste la zona en llamas antes de que se propagara (-${Math.floor(damage)} estructura).`;
+      }
+      Game.player.health -= 10;
+      const spottedEarly = Game.raft.countProvides('lookout') > 0;
+      const damage = damageAtBuilding(
+        ['fire', 'kitchen', 'smokehouse', 'lookout', 'sail', 'bunk'],
+        spottedEarly ? 8 : 12,
+        'fire'
+      );
+      return `Sofocaste el incendio a mano (-10 salud, -${Math.floor(damage)} estructura).`;
+    }
+
+    if (eventKey === 'contaminatedWater') {
+      if (optionId === 'boil') {
+        Game.resources.water += 0.8;
+        return 'Herviste el depósito y recuperaste 0,8 de agua segura.';
+      }
+      if (optionId === 'drink') {
+        Game.resources.water += 1;
+        Game.player.health -= 5;
+        Game.infectionDays = Math.max(Game.infectionDays, 3);
+        return 'Guardaste el agua contaminada: +1 agua, -5 salud y una infección.';
+      }
+      Game.player.morale -= 1;
+      return 'Desechaste el agua dudosa antes de que enfermara a nadie.';
+    }
+
+    if (eventKey === 'sealedContainer') {
+      if (optionId === 'tools') {
+        Game.resources.metal -= 1;
+        Game.resources.wood += 3;
+        Game.resources.plastic += 2;
+        Game.resources.rope += 1;
+        return 'Abriste el contenedor: +3 madera, +2 plástico y +1 cuerda.';
+      }
+      if (optionId === 'force') {
+        Game.player.health -= 8;
+        Game.resources.metal += 2;
+        Game.resources.food += 1;
+        return 'La tapa te hirió, pero recuperaste +2 metal y +1 comida (-8 salud).';
+      }
+      Game.player.morale -= 1;
+      return 'El contenedor desapareció entre las olas.';
+    }
+
+    if (eventKey === 'ghostShip') {
+      if (optionId === 'explore') {
+        Game.resources.wood += 4;
+        Game.resources.metal += 3;
+        Game.resources.cloth += 2;
+        Game.player.health -= 4;
+        Game.infectionDays = Math.max(
+          Game.infectionDays,
+          Game.raft.countProvides('infirmary') > 0 ? 1 : 3
+        );
+        return 'Exploraste el barco: gran botín, una herida y posible infección.';
+      }
+      if (optionId === 'salvage') {
+        Game.resources.wood += 2;
+        Game.resources.metal += 1;
+        return 'Recogiste +2 madera y +1 metal sin subir al barco.';
+      }
+      Game.player.sanity += 3;
+      return 'Te alejaste del barco fantasma y recuperaste algo de cordura.';
+    }
+
+    if (eventKey === 'fishMigration') {
+      if (optionId === 'stop') {
+        Game.anchorDeployed = true;
+        Game.resources.food += 2.5;
+        if (Game.victoryCondition === 'island') Game.islandDistance += 8;
+        return 'Echaste el ancla y llenaste las redes (+2,5 comida), pero perdiste distancia.';
+      }
+      if (optionId === 'moving') {
+        Game.resources.food += 1;
+        return 'Pescaste en marcha y recuperaste +1 de comida.';
+      }
+      if (Game.victoryCondition === 'island') {
+        Game.islandDistance = Math.max(0, Game.islandDistance - 3);
+      }
+      return 'Mantuviste el rumbo y dejaste atrás el banco.';
+    }
+
+    if (eventKey === 'current') {
+      if (optionId === 'steer') {
+        if (Game.victoryCondition === 'island') {
+          Game.islandDistance = Math.max(0, Game.islandDistance - 14);
+        } else {
+          Game.navigationIntel = Math.min(120, Game.navigationIntel + 12);
+        }
+        return 'La mesa de navegación convirtió la corriente en avance seguro.';
+      }
+      if (optionId === 'anchor') {
+        Game.anchorDeployed = true;
+        Game.player.morale += 2;
+        return 'El ancla resistió la corriente sin desviar la balsa.';
+      }
+      if (optionId === 'row') {
+        Game.player.stamina = Math.max(0, Game.player.stamina - 50);
+        Game.player.thirst = Math.max(0, Game.player.thirst - 8);
+        const damage = Game.raft.takeDamage(4);
+        if (Game.victoryCondition === 'island') {
+          Game.islandDistance = Math.max(0, Game.islandDistance - 8);
+        }
+        return `La tripulación venció la corriente remando (-50 energía, -${Math.floor(damage)} estructura).`;
+      }
+      const damage = Game.raft.takeDamage(14, null, null, 'reef');
+      if (Game.victoryCondition === 'island') {
+        Game.islandDistance = Math.max(0, Game.islandDistance - 24);
+      } else {
+        Game.worldOffset += 120;
+      }
+      return `La corriente dio un gran impulso, pero causó ${Math.floor(damage)} de daño.`;
+    }
+
+    if (eventKey === 'outbreak') {
+      if (optionId === 'treat') {
+        Game.resources.cloth -= 1;
+        Game.resources.water -= 0.5;
+        for (const member of CrewManager.members) {
+          if (member.alive) member.health = Math.min(100, member.health + 5);
+        }
+        return 'La enfermería cortó el brote antes de que se extendiera.';
+      }
+      if (optionId === 'isolate') {
+        const patient = healthiestCrew();
+        if (patient) {
+          patient.restrainedDays = Math.max(1, patient.restrainedDays);
+          patient.stress = Math.min(100, patient.stress + 14);
+          patient.trust = Math.max(0, patient.trust - 8);
+        }
+        return 'El aislamiento contuvo el brote, pero aumentó la tensión.';
+      }
+      if (optionId === 'care') {
+        Game.resources.food -= 0.5;
+        Game.resources.water -= 1;
+        for (const member of CrewManager.members) {
+          if (member.alive) member.health = Math.max(1, member.health - 3);
+        }
+        return 'Los cuidados básicos evitaron la infección, aunque varios siguen débiles.';
+      }
+      if (optionId === 'separate') {
+        for (const member of CrewManager.members) {
+          if (!member.alive) continue;
+          member.health = Math.max(1, member.health - 3);
+          member.stress = Math.min(100, member.stress + 10);
+        }
+        Game.player.morale -= 3;
+        return 'La separación improvisada frenó el brote, pero debilitó y tensó al grupo.';
+      }
+      Game.infectionDays = Math.max(Game.infectionDays, 3);
+      for (const member of CrewManager.members) {
+        if (member.alive) {
+          member.health = Math.max(0, member.health - 10);
+          if (member.health <= 0) member.alive = false;
+        }
+      }
+      return 'El brote se extendió: la tripulación pierde salud y tú quedas infectado.';
+    }
+
+    if (eventKey === 'mutiny') {
+      if (optionId === 'negotiate') {
+        Game.resources.food -= 1;
+        Game.resources.water -= 1.3;
+        for (const member of CrewManager.members) {
+          if (!member.alive) continue;
+          member.stress = Math.max(0, member.stress - 18);
+          member.trust = Math.min(100, member.trust + 8);
+        }
+        return 'Compartir las reservas frenó el motín y recuperó confianza.';
+      }
+      if (optionId === 'contain') {
+        const leader = mostStressedCrew();
+        if (leader) {
+          leader.restrainedDays = Math.max(1, leader.restrainedDays);
+          leader.stress = Math.max(35, leader.stress - 12);
+          leader.trust = Math.max(0, leader.trust - 12);
+        }
+        Game.player.morale -= 5;
+        return 'Los cabecillas fueron contenidos, pero la moral del grupo cayó.';
+      }
+      if (optionId === 'appease') {
+        Game.player.morale -= 8;
+        for (const member of CrewManager.members) {
+          if (!member.alive) continue;
+          member.stress = Math.max(0, member.stress - 6);
+          member.trust = Math.min(100, member.trust + 2);
+        }
+        return 'Prometiste cambios: bajó la tensión, pero también tu autoridad.';
+      }
+      Game.player.health -= 15;
+      Game.player.morale -= 8;
+      const leader = mostStressedCrew();
+      if (leader) {
+        leader.health = Math.max(1, leader.health - 10);
+        leader.trust = Math.max(0, leader.trust - 15);
+      }
+      return 'El enfrentamiento terminó con heridas y resentimiento (-15 salud).';
+    }
+
+    if (eventKey === 'whale') {
+      if (optionId === 'follow') {
+        Game.resources.food += 1.5;
+        if (Game.victoryCondition === 'island') {
+          Game.islandDistance = Math.max(0, Game.islandDistance - 10);
+        } else {
+          Game.navigationIntel = Math.min(120, Game.navigationIntel + 10);
+        }
+        return 'Seguiste a la ballena: +1,5 comida y una ruta más clara.';
+      }
+      if (optionId === 'approach') {
+        Game.resources.food += 3;
+        const damage = Game.raft.takeDamage(18);
+        return `La pesca fue abundante (+3), pero la ballena causó ${Math.floor(damage)} de daño.`;
+      }
+      Game.player.morale += 5;
+      return 'Observar la ballena desde lejos levantó la moral.';
+    }
+
+    if (eventKey === 'distressFlare') {
+      if (optionId === 'rescue') {
+        Game.resources.food -= 1;
+        Game.resources.water -= 1.3;
+        const survivor = new Survivor();
+        survivor.health = 65;
+        survivor.hunger = 45;
+        survivor.thirst = 35;
+        survivor.trust = 58;
+        survivor.stress = 42;
+        if (CrewManager.add(survivor)) {
+          CrewManager.assignPosition(survivor, Game.raft);
+          Game.stats.rescued++;
+          return `Rescataste a ${survivor.name}; llega débil y con su propia historia.`;
+        }
+        return 'No había espacio seguro para completar el rescate.';
+      }
+      if (optionId === 'signal') {
+        if (Game.victoryCondition === 'radio') {
+          Game.rescuedSignal = Math.min(100, Game.rescuedSignal + 10);
+        } else {
+          Game.radioIntel = Math.min(40, Game.radioIntel + 6);
+        }
+        return 'La respuesta luminosa reforzó la red de señales de rescate.';
+      }
+      if (optionId === 'tow') {
+        Game.player.health -= 10;
+        Game.player.stamina = Math.max(0, Game.player.stamina - 45);
+        const survivor = new Survivor();
+        survivor.health = 40;
+        survivor.hunger = 25;
+        survivor.thirst = 20;
+        survivor.trust = 50;
+        survivor.stress = 60;
+        if (CrewManager.add(survivor)) {
+          CrewManager.assignPosition(survivor, Game.raft);
+          Game.stats.rescued++;
+          return `Remolcaste a ${survivor.name} sin reservas (-10 salud, -45 energía).`;
+        }
+        return 'El remolque fracasó y te dejó exhausto.';
+      }
+      Game.player.morale -= 4;
+      return 'La llamarada quedó atrás y la decisión pesó sobre el grupo.';
+    }
+
+    if (eventKey === 'gulls') {
+      if (optionId === 'follow') {
+        Game.resources.food = Math.max(0, Game.resources.food - 0.2);
+        if (Game.victoryCondition === 'island') {
+          Game.islandDistance = Math.max(0, Game.islandDistance - 30);
+        } else {
+          Game.navigationIntel = Math.min(120, Game.navigationIntel + 20);
+        }
+        return 'Seguiste la bandada y obtuviste una pista firme de tierra.';
+      }
+      if (optionId === 'protect') {
+        const loss = Game.raft.countProvides('lookout') > 0 ? 0 : 0.5;
+        Game.resources.food = Math.max(0, Game.resources.food - loss);
+        return loss > 0
+          ? 'Protegiste casi todo, pero las gaviotas robaron 0,5 de comida.'
+          : 'La vigía permitió espantar a las gaviotas sin perder comida.';
+      }
+      Game.resources.food += 0.8;
+      Game.player.morale -= 2;
+      return 'La trampa aportó 0,8 de comida, pero incomodó a la tripulación.';
+    }
+    return '';
   },
 
   pickDailyEvents: () => {
@@ -1940,7 +2915,38 @@ const Game = {
       list.push(Util.choice(randomEvents));
     }
     if (!list.includes('argument') && Math.random() < CrewManager.getConflictChance()) list.push('argument');
-    return list;
+    if (Math.random() < 0.16) {
+      const decisionEvents = [
+        'contaminatedWater', 'sealedContainer', 'ghostShip',
+        'fishMigration', 'current', 'whale', 'distressFlare', 'gulls'
+      ];
+      if (CrewManager.count() > 0) {
+        decisionEvents.push('outbreak', 'mutiny');
+      }
+      decisionEvents.push('fire');
+      if (
+        Game.raft.countProvides('cook') > 0 ||
+        Game.raft.countProvides('preserve') > 0 ||
+        Game.raft.countProvides('lookout') > 0
+      ) {
+        decisionEvents.push('fire');
+      }
+      if (Game.zone === 'fish') decisionEvents.push('fishMigration');
+      if (Game.zone === 'reef' || Game.zone === 'storm') {
+        decisionEvents.push('current');
+      }
+      list.push(Util.choice(decisionEvents));
+    }
+    const attraction = Util.clamp(
+      Game.raft.countProvides('sharkScent') * 0.06 +
+        (Game.beaconLit ? 0.08 : 0),
+      0,
+      0.35
+    );
+    if (!list.includes('shark') && Math.random() < attraction) {
+      list.push('shark');
+    }
+    return [...new Set(list)];
   },
 
   applyEvent: (ev) => {
@@ -1989,14 +2995,20 @@ const Game = {
       case 'lost':
         if (CrewManager.count() > 0 && Math.random() < 0.3) {
           const victim = Util.choice(CrewManager.members.filter(m => m.alive));
-          victim.health = Math.max(0, victim.health - 20);
+          const lookout = Game.raft.countProvides('lookout');
+          const fallDamage = lookout > 0 ? 8 : 20;
+          victim.health = Math.max(0, victim.health - fallDamage);
           if (victim.health <= 0) {
             victim.alive = false;
             CrewManager.removeMesh(victim);
             victim.deathLogged = true;
             Log.add(`${victim.name} cayó al mar y no sobrevivió.`);
           } else {
-            Log.add(`${victim.name} cayó al mar y resultó herido.`);
+            Log.add(
+              lookout > 0
+                ? `La vigía vio caer a ${victim.name} y permitió rescatarlo a tiempo.`
+                : `${victim.name} cayó al mar y resultó herido.`
+            );
           }
         }
         break;
@@ -2059,7 +3071,18 @@ const Game = {
     return {
       storm: 'tormenta', shark: 'ataque de tiburón', sick: 'enfermedad',
       argument: 'discusión', lost: 'accidente', gift: 'suministros', debris: 'restos',
-      heat: 'calor extremo', wave: 'ola gigante', bird: 'ave cercana', ship: 'barco avistado'
+      heat: 'calor extremo', wave: 'ola gigante', bird: 'ave cercana', ship: 'barco avistado',
+      fire: 'incendio a bordo',
+      contaminatedWater: 'agua contaminada',
+      sealedContainer: 'contenedor sellado',
+      ghostShip: 'barco fantasma',
+      fishMigration: 'migración de peces',
+      current: 'corriente marina',
+      outbreak: 'brote infeccioso',
+      mutiny: 'conato de motín',
+      whale: 'ballena cercana',
+      distressFlare: 'llamarada de auxilio',
+      gulls: 'bandada de gaviotas'
     }[ev] || ev;
   },
 

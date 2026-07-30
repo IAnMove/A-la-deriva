@@ -57,6 +57,41 @@ const BUILDINGS = {
     desc: 'Fija el rumbo lateral y mejora la eficacia de vela y remo.',
     weight: 1.0, health: 45, provides: { rudder: 1 }
   },
+  lookout: {
+    key: 'lookout', name: 'Torre de vigía', icon: '🔭', category: 'basic',
+    cost: { wood: 5, rope: 2, cloth: 1 },
+    desc: 'Alarga el aviso de los tiburones y permite anticipar peligros en varios eventos.',
+    drawback: 'Es alta y recibe más daño durante incendios y tormentas.',
+    weight: 1.1, health: 38, provides: { lookout: 1 }
+  },
+  smokehouse: {
+    key: 'smokehouse', name: 'Ahumadero', icon: '🥓', category: 'basic',
+    cost: { wood: 5, metal: 1, rope: 1 },
+    desc: 'Reduce el deterioro de la comida y permite ahumar una ración para aprovecharla mejor.',
+    drawback: 'Su olor aumenta ligeramente la posibilidad de atraer tiburones.',
+    weight: 1.0, health: 38, provides: { preserve: 1, sharkScent: 1 }
+  },
+  armor: {
+    key: 'armor', name: 'Blindaje lateral', icon: '🛡️', category: 'basic',
+    cost: { wood: 4, metal: 3, rope: 2 },
+    desc: 'Reduce el daño causado por corales, tiburones y golpes contra la balsa.',
+    drawback: 'Es muy pesado y ralentiza la navegación.',
+    weight: 2.8, health: 80, provides: { armor: 1 }
+  },
+  anchor: {
+    key: 'anchor', name: 'Ancla improvisada', icon: '🪝', category: 'basic',
+    cost: { metal: 3, rope: 4, wood: 2 },
+    desc: 'Se puede desplegar para detener la deriva y resistir corrientes mientras recoges recursos.',
+    drawback: 'Desplegada impide avanzar y puede tensar la balsa durante una tormenta.',
+    weight: 1.8, health: 55, provides: { anchor: 1 }
+  },
+  bunk: {
+    key: 'bunk', name: 'Camarote común', icon: '🛌', category: 'basic',
+    cost: { wood: 5, cloth: 4, rope: 2 },
+    desc: 'Da descanso a dos tripulantes y reduce estrés, alucinaciones y conflictos.',
+    drawback: 'Si no hay plazas para todos aparecen celos y baja la moral.',
+    weight: 1.3, health: 45, provides: { bunk: 2, rest: 0.5 }
+  },
   purifier: {
     key: 'purifier', name: 'Purificador de agua', icon: '💧', category: 'advanced',
     cost: { metal: 4, plastic: 3, wood: 3 },
@@ -98,6 +133,41 @@ const BUILDINGS = {
     cost: { metal: 8, plastic: 5, wood: 4 },
     desc: 'Acelera la ruta a una isla; convierte plástico en combustible.',
     weight: 2.0, health: 50, provides: { motor: 1 }
+  },
+  harpoon: {
+    key: 'harpoon', name: 'Arponera', icon: '🔱', category: 'advanced',
+    cost: { metal: 6, rope: 4, wood: 4 },
+    desc: 'Permite disparar contra un tiburón cercano para ahuyentarlo y recuperar algo de comida.',
+    drawback: 'Cada disparo daña el mecanismo y exige acercarse a la arponera.',
+    weight: 1.7, health: 55, provides: { harpoon: 1 }
+  },
+  infirmary: {
+    key: 'infirmary', name: 'Enfermería', icon: '🏥', category: 'advanced',
+    cost: { cloth: 6, plastic: 4, metal: 3, wood: 3 },
+    desc: 'Cura heridas, acorta infecciones y mejora mucho el trabajo de médicos.',
+    drawback: 'Necesita tela y agua para resolver brotes graves.',
+    weight: 1.4, health: 48, provides: { infirmary: 1, heal: 2 }
+  },
+  chart: {
+    key: 'chart', name: 'Mesa de navegación', icon: '🗺️', category: 'advanced',
+    cost: { wood: 5, cloth: 3, plastic: 2 },
+    desc: 'Mejora decisiones de ruta, permite leer corrientes y acelera el viaje a la isla.',
+    drawback: 'Rinde poco sin timón operativo o sin un navegante.',
+    weight: 1.0, health: 40, provides: { forecast: 1, navigation: 1 }
+  },
+  beacon: {
+    key: 'beacon', name: 'Faro de señales', icon: '🚨', category: 'advanced',
+    cost: { metal: 5, plastic: 5, cloth: 2 },
+    desc: 'Se puede encender para generar señal de rescate incluso sin radio.',
+    drawback: 'Consume combustible cada día y su luz atrae amenazas.',
+    weight: 1.4, health: 42, provides: { beacon: 1 }
+  },
+  containment: {
+    key: 'containment', name: 'Celda de contención', icon: '🔒', category: 'advanced',
+    cost: { metal: 7, wood: 5, rope: 3 },
+    desc: 'Ayuda a reducir NPC hostiles y ofrece una salida segura durante motines o brotes.',
+    drawback: 'Tenerla a bordo reduce confianza y moral si nadie está en crisis.',
+    weight: 2.0, health: 70, provides: { containment: 1 }
   },
 };
 
@@ -199,6 +269,37 @@ function buildStructureMesh(key) {
       g.add(handle);
       break;
     }
+    case 'lookout':
+      g.add(cyl(0.09, 0.12, 2.4, 0x5d4037, 0, 1.2, 0));
+      g.add(box(1.25, 0.12, 1.25, 0x8d6e63, 0, 2.1, 0));
+      g.add(cyl(0.13, 0.16, 0.65, 0x263238, 0.18, 2.38, 0));
+      break;
+    case 'smokehouse': {
+      g.add(box(1.25, 1.0, 1.1, 0x6d4c41, 0, 0.5, 0));
+      const smokePipe = cyl(0.13, 0.16, 0.9, 0x455a64, 0.35, 1.35, 0);
+      g.add(smokePipe);
+      g.add(box(0.42, 0.55, 0.04, 0x3e2723, 0, 0.48, 0.57));
+      break;
+    }
+    case 'armor':
+      g.add(box(1.72, 0.72, 0.16, 0x607d8b, 0, 0.36, -0.78));
+      g.add(box(1.72, 0.72, 0.16, 0x607d8b, 0, 0.36, 0.78));
+      g.add(box(0.16, 0.72, 1.4, 0x455a64, -0.78, 0.36, 0));
+      g.add(box(0.16, 0.72, 1.4, 0x455a64, 0.78, 0.36, 0));
+      break;
+    case 'anchor': {
+      g.add(cyl(0.09, 0.09, 1.2, 0x37474f, 0, 0.35, 0));
+      const cross = box(1.0, 0.12, 0.12, 0x37474f, 0, 0.12, 0);
+      g.add(cross);
+      g.add(new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.07, 6, 10), mat(0x455a64)));
+      break;
+    }
+    case 'bunk':
+      g.add(box(1.55, 0.14, 0.72, 0x8d6e63, 0, 0.25, -0.38));
+      g.add(box(1.55, 0.14, 0.72, 0x8d6e63, 0, 0.95, 0.38));
+      g.add(box(1.42, 0.1, 0.62, 0x90caf9, 0, 0.36, -0.38));
+      g.add(box(1.42, 0.1, 0.62, 0x90caf9, 0, 1.06, 0.38));
+      break;
     case 'purifier':
       g.add(cyl(0.45, 0.5, 0.9, 0x90a4ae, 0, 0.45, 0, 10));
       g.add(cyl(0.25, 0.25, 0.5, 0x4fc3f7, 0, 1.1, 0, 8));
@@ -243,6 +344,41 @@ function buildStructureMesh(key) {
       g.add(shaft);
       break;
     }
+    case 'harpoon': {
+      g.add(cyl(0.18, 0.24, 0.7, 0x546e7a, 0, 0.35, 0));
+      const launcher = cyl(0.09, 0.09, 1.45, 0x37474f, 0, 0.82, 0);
+      launcher.rotation.x = Math.PI / 2;
+      g.add(launcher);
+      const tip = cone(0.16, 0.42, 0xcfd8dc, 0, 0.82, -0.9);
+      tip.rotation.x = Math.PI / 2;
+      g.add(tip);
+      break;
+    }
+    case 'infirmary':
+      g.add(box(1.5, 0.28, 0.8, 0xeceff1, 0, 0.22, 0));
+      g.add(box(0.35, 0.16, 0.68, 0x90caf9, -0.48, 0.45, 0));
+      g.add(box(0.52, 0.12, 0.16, 0xe53935, 0.42, 0.44, 0));
+      g.add(box(0.16, 0.12, 0.52, 0xe53935, 0.42, 0.44, 0));
+      break;
+    case 'chart':
+      g.add(box(1.45, 0.16, 1.1, 0x8d6e63, 0, 0.72, 0));
+      g.add(box(1.2, 0.03, 0.85, 0xfff3c4, 0, 0.82, 0));
+      for (const x of [-0.55, 0.55]) {
+        for (const z of [-0.38, 0.38]) g.add(cyl(0.05, 0.06, 0.7, 0x5d4037, x, 0.35, z));
+      }
+      break;
+    case 'beacon':
+      g.add(cyl(0.28, 0.4, 1.15, 0x455a64, 0, 0.58, 0));
+      g.add(cyl(0.32, 0.32, 0.42, 0xffca28, 0, 1.35, 0, 10));
+      g.add(cone(0.38, 0.22, 0xe53935, 0, 1.68, 0, 10));
+      break;
+    case 'containment':
+      for (const x of [-0.72, -0.24, 0.24, 0.72]) {
+        g.add(cyl(0.035, 0.035, 1.25, 0x78909c, x, 0.63, -0.62));
+        g.add(cyl(0.035, 0.035, 1.25, 0x78909c, x, 0.63, 0.62));
+      }
+      g.add(box(1.55, 0.08, 1.35, 0x546e7a, 0, 1.25, 0));
+      break;
   }
   return g;
 }
@@ -505,9 +641,19 @@ class Raft {
   totalAutoWater() { return this.countProvides('rainWater') + this.countProvides('purifiedWater'); }
   totalShelter() { return this.countProvides('shelter'); }
 
-  takeDamage(amount, impactX = null, impactZ = null) {
+  takeDamage(amount, impactX = null, impactZ = null, damageType = 'generic') {
     const shelter = this.totalShelter();
     if (shelter > 0) amount *= Math.max(0.3, 1 - shelter * 0.25);
+    const armor = this.countProvides('armor');
+    if (armor > 0 && damageType !== 'fire') {
+      const protectionPerModule =
+        damageType === 'reef' ? 0.24 :
+          damageType === 'shark' ? 0.18 : 0.1;
+      const maxProtection =
+        damageType === 'reef' ? 0.65 :
+          damageType === 'shark' ? 0.5 : 0.32;
+      amount *= 1 - Math.min(maxProtection, armor * protectionPerModule);
+    }
     const cells = Array.from(this.grid.entries());
     if (!cells.length) return 0;
 
@@ -669,6 +815,10 @@ const BuildManager = {
         <div class="build-icon">${b.icon}</div>
         <div class="build-info">
           <div class="build-name">${b.name}</div>
+          <div class="build-desc">${b.desc}</div>
+          ${b.drawback
+            ? `<div class="build-risk">⚠ ${b.drawback}</div>`
+            : ''}
           <div class="build-cost">${Object.entries(cost).map(([k, v]) => `${Util.resourceName(k)}: ${Util.formatAmount(v, 2)}`).join(', ')}</div>
         </div>
         <div style="color:${affordable ? 'var(--success)' : 'var(--danger)'};font-size:0.75rem">${affordable ? '✓' : '✗'}</div>
@@ -688,6 +838,7 @@ const BuildManager = {
     container.innerHTML = `
       <strong>${b.name}</strong><br>
       ${b.desc}<br>
+      ${b.drawback ? `<span class="build-drawback">Contrapartida: ${b.drawback}</span><br>` : ''}
       <span style="color:${affordable ? 'var(--success)' : 'var(--danger)'}">
         Coste: ${Object.entries(cost).map(([k, v]) => `${Util.resourceName(k)}: ${Util.formatAmount(v, 2)}`).join(', ')}
       </span><br>

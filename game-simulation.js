@@ -205,6 +205,7 @@ const GameSimulation = Object.freeze({
     game.hallucinationTimer = 0;
     game.crewConflict = { active: false };
     game.pendingDaySummary = null;
+    game.pendingDayResolution = null;
     game.mouseWorld = null;
     game.elapsed = 0;
     if (typeof GameRenderer !== 'undefined') GameRenderer.visualElapsed = 0;
@@ -708,15 +709,23 @@ const GameSimulation = Object.freeze({
     if (!game?.resources || !game.raft ||
         game.raft.countProvides('storage') > 0 ||
         game.day <= 2) return null;
+    const preservation = Util.clamp(
+      game.raft.countProvides('preserve'),
+      0,
+      1
+    );
     const seed = (
       Math.imul(Math.floor(game.day), 2654435761) ^
       Math.imul(Math.floor(game.stats?.rescued || 0) + 1, 2246822519)
     ) >>> 0;
     const roll = seed / 4294967296;
-    if (roll >= 0.18) return null;
+    if (roll >= 0.18 - preservation * 0.1) return null;
     const foodLost = Math.min(
       Math.max(0, game.resources.food || 0),
-      Math.min(0.25, (game.resources.food || 0) * 0.12)
+      Math.min(
+        0.25,
+        (game.resources.food || 0) * 0.12
+      ) * (1 - preservation * 0.85)
     );
     const waterLost = Math.min(
       Math.max(0, game.resources.water || 0),
@@ -842,6 +851,7 @@ const GameSimulation = Object.freeze({
       sail: Util.clamp(game.raft.countProvides('sail'), 0, 1),
       rudder: Util.clamp(game.raft.countProvides('rudder'), 0, 1),
       motor: Util.clamp(game.raft.countProvides('motor'), 0, 1),
+      chart: Util.clamp(game.raft.countProvides('navigation'), 0, 1),
       fuel: Math.max(0, Number(game.resources.fuel) || 0),
       heading: Util.clamp(
         Number(game.navigationHeading) || 0,
@@ -899,6 +909,7 @@ const GameSimulation = Object.freeze({
       navigation.sail * NAVIGATION_BALANCE.sailMetersPerDay +
       navigation.motor * motorFuelRatio *
         NAVIGATION_BALANCE.motorMetersPerDay +
+      navigation.chart * 4 +
       CrewManager.getDriftBonus() *
         NAVIGATION_BALANCE.navigatorMetersPerDay;
     const moved =

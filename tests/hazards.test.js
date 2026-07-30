@@ -55,6 +55,13 @@ assert.equal(run('dangerFixture.targetMarker.visible'), true);
 assert.equal(run('dangerFixture.targetId'), 'player');
 
 run(`
+  Game.raft = { countProvides: key => key === 'lookout' ? 1 : 0 };
+  var warnedDangerFixture = new Danger(10, 1, 'shark', hazardSceneFixture);
+  warnedDangerFixture.lockTarget([playerTargetFixture]);
+`);
+assert.ok(run('warnedDangerFixture.attackTimer') > 2.4);
+
+run(`
   dangerFixture.attackTimer = 0.01;
   dangerFixture.update(
     0.1, 0, 0, 2, { x: 1, z: 1 }, [playerTargetFixture]

@@ -86,6 +86,9 @@ assert.match(html, /class="panel hero-panel"/);
 assert.match(css, /#threat-panel\.critical/);
 assert.match(css, /\.crew-condition\.critical/);
 assert.match(css, /#crew-conflict-track/);
+assert.match(css, /\.build-desc/);
+assert.match(css, /\.build-risk/);
+assert.match(css, /\.build-drawback/);
 assert.match(css, /backdrop-filter:\s*blur\(14px\)/);
 
 console.log('✓ feedback por severidad, HUD profesional y avisos de amenazas');
