@@ -139,10 +139,11 @@ function test(name, fn) {
   }
 }
 
-test('guardado v2 migra v1, sanea valores y recupera preferencias corruptas', () => {
+test('guardado v3 migra v2, sanea valores y recupera preferencias corruptas', () => {
   const { sandbox } = createSandbox();
   load(sandbox, 'save.js');
-  sandbox.localStorage.setItem('aladeriva3d_save_v1', JSON.stringify({
+  sandbox.localStorage.setItem('aladeriva3d_save_v2', JSON.stringify({
+    schemaVersion: 2,
     day: 4,
     player: { health: 80 },
     resources: { water: 3 }
@@ -151,16 +152,21 @@ test('guardado v2 migra v1, sanea valores y recupera preferencias corruptas', ()
   assert.equal(run(sandbox, 'Save.exists()'), true);
   const loaded = run(sandbox, 'Save.load()');
   assert.equal(loaded.day, 4);
-  assert.equal(loaded.schemaVersion, 2);
-  assert.ok(sandbox.localStorage.getItem('aladeriva3d_save_v2'));
-  assert.equal(sandbox.localStorage.getItem('aladeriva3d_save_v1'), null);
+  assert.equal(loaded.schemaVersion, 3);
+  assert.ok(sandbox.localStorage.getItem('aladeriva3d_save_v3'));
+  assert.equal(sandbox.localStorage.getItem('aladeriva3d_save_v2'), null);
 
   assert.equal(run(sandbox, 'Save.save({ day: Infinity, note: "ok" })'), true);
-  assert.equal(JSON.parse(sandbox.localStorage.getItem('aladeriva3d_save_v2')).day, 0);
+  assert.equal(JSON.parse(sandbox.localStorage.getItem('aladeriva3d_save_v3')).day, 0);
 
   sandbox.localStorage.setItem('aladeriva3d_prefs_v2', 'null');
   sandbox.localStorage.setItem('aladeriva3d_prefs_v1', '{dañado');
   assert.deepEqual({ ...run(sandbox, 'Save.loadPrefs()') }, { sound: true });
+
+  run(sandbox, 'Save.clear()');
+  sandbox.localStorage.setItem('aladeriva3d_save_v1', JSON.stringify({ day: 2 }));
+  assert.equal(run(sandbox, 'Save.load().schemaVersion'), 3);
+  assert.equal(sandbox.localStorage.getItem('aladeriva3d_save_v1'), null);
 });
 
 test('un slot futuro bloquea fallback y escrituras sin destruir ninguna copia', () => {
@@ -168,17 +174,17 @@ test('un slot futuro bloquea fallback y escrituras sin destruir ninguna copia', 
   load(sandbox, 'save.js');
   const futureRaw = '{"schemaVersion":999,"day":8,"futureOnly":{"cargo":42}}';
   const legacyRaw = '{"day":4,"player":{"health":80}}';
-  sandbox.localStorage.setItem('aladeriva3d_save_v2', futureRaw);
+  sandbox.localStorage.setItem('aladeriva3d_save_v3', futureRaw);
   sandbox.localStorage.setItem('aladeriva3d_save_v1', legacyRaw);
 
   assert.equal(run(sandbox, 'Save.hasIncompatibleCurrent()'), true);
   assert.equal(run(sandbox, 'Save.exists()'), true);
   assert.equal(run(sandbox, 'Save.load()'), null);
-  assert.equal(sandbox.localStorage.getItem('aladeriva3d_save_v2'), futureRaw);
+  assert.equal(sandbox.localStorage.getItem('aladeriva3d_save_v3'), futureRaw);
   assert.equal(sandbox.localStorage.getItem('aladeriva3d_save_v1'), legacyRaw);
 
   assert.equal(run(sandbox, 'Save.save({ day: 99 })'), false);
-  assert.equal(sandbox.localStorage.getItem('aladeriva3d_save_v2'), futureRaw);
+  assert.equal(sandbox.localStorage.getItem('aladeriva3d_save_v3'), futureRaw);
   assert.equal(sandbox.localStorage.getItem('aladeriva3d_save_v1'), legacyRaw);
 });
 
@@ -190,7 +196,7 @@ test('un slot demasiado grande se conserva como incompatible', () => {
     futureOnly: 'x'.repeat(512 * 1024)
   });
   const legacyRaw = '{"day":4,"player":{"health":80}}';
-  sandbox.localStorage.setItem('aladeriva3d_save_v2', oversizedRaw);
+  sandbox.localStorage.setItem('aladeriva3d_save_v3', oversizedRaw);
   sandbox.localStorage.setItem('aladeriva3d_save_v1', legacyRaw);
 
   assert.equal(run(sandbox, 'Save.inspectCurrent().status'), 'oversize');
@@ -199,7 +205,7 @@ test('un slot demasiado grande se conserva como incompatible', () => {
   assert.equal(run(sandbox, 'Save.load()'), null);
   assert.equal(run(sandbox, 'Save.save({ day: 99 })'), false);
   assert.equal(
-    sandbox.localStorage.getItem('aladeriva3d_save_v2'),
+    sandbox.localStorage.getItem('aladeriva3d_save_v3'),
     oversizedRaw
   );
   assert.equal(
@@ -211,8 +217,9 @@ test('un slot demasiado grande se conserva como incompatible', () => {
 test('un slot actual realmente corrupto permite recuperar y migrar el legacy', () => {
   const { sandbox } = createSandbox();
   load(sandbox, 'save.js');
-  sandbox.localStorage.setItem('aladeriva3d_save_v2', '{guardado-roto');
-  sandbox.localStorage.setItem('aladeriva3d_save_v1', JSON.stringify({
+  sandbox.localStorage.setItem('aladeriva3d_save_v3', '{guardado-roto');
+  sandbox.localStorage.setItem('aladeriva3d_save_v2', JSON.stringify({
+    schemaVersion: 2,
     day: 6,
     resources: { water: 5 }
   }));
@@ -220,9 +227,9 @@ test('un slot actual realmente corrupto permite recuperar y migrar el legacy', (
   assert.equal(run(sandbox, 'Save.hasIncompatibleCurrent()'), false);
   const loaded = run(sandbox, 'Save.load()');
   assert.equal(loaded.day, 6);
-  assert.equal(loaded.schemaVersion, 2);
-  assert.equal(JSON.parse(sandbox.localStorage.getItem('aladeriva3d_save_v2')).day, 6);
-  assert.equal(sandbox.localStorage.getItem('aladeriva3d_save_v1'), null);
+  assert.equal(loaded.schemaVersion, 3);
+  assert.equal(JSON.parse(sandbox.localStorage.getItem('aladeriva3d_save_v3')).day, 6);
+  assert.equal(sandbox.localStorage.getItem('aladeriva3d_save_v2'), null);
 });
 
 test('autoguardado desacoplado responde a pagehide/visibility y respeta el estado', () => {
@@ -237,13 +244,13 @@ test('autoguardado desacoplado responde a pagehide/visibility y respeta el estad
     );
   `);
   windowTarget.dispatchEvent({ type: 'pagehide' });
-  assert.equal(JSON.parse(sandbox.localStorage.getItem('aladeriva3d_save_v2')).day, 7);
+  assert.equal(JSON.parse(sandbox.localStorage.getItem('aladeriva3d_save_v3')).day, 7);
 
   run(sandbox, 'autosaveAllowedFixture = false; autosaveDayFixture = 8;');
   documentTarget.hidden = true;
   documentTarget.visibilityState = 'hidden';
   documentTarget.dispatchEvent({ type: 'visibilitychange' });
-  assert.equal(JSON.parse(sandbox.localStorage.getItem('aladeriva3d_save_v2')).day, 7);
+  assert.equal(JSON.parse(sandbox.localStorage.getItem('aladeriva3d_save_v3')).day, 7);
 });
 
 test('Input táctil mantiene acciones continuas y evita clic al arrastrar', () => {

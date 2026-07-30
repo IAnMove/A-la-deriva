@@ -221,12 +221,7 @@ function crewBehaviorRoll(member, day, salt = 0) {
 }
 
 function escapeSurvivorHtml(value) {
-  return String(value ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#039;');
+  return Util.escapeHtml(value);
 }
 
 // Figura low-poly articulada de una persona
@@ -317,6 +312,9 @@ class Survivor {
     const s = new Survivor();
     Object.assign(s, data || {});
     s.mesh = null;
+    s.name = typeof data?.name === 'string' && data.name.trim()
+      ? data.name.trim().slice(0, 80)
+      : s.name;
     s.skill = SKILLS.find(k => k.key === data?.skill?.key) || SKILLS[0];
     s.trait = TRAITS.find(k => k.key === data?.trait?.key) || TRAITS[0];
     const savedStory = getSurvivorStory(data?.story);
@@ -356,6 +354,13 @@ class Survivor {
       : '';
     s.lastFoodRatio = Util.clamp(finiteNumber(data?.lastFoodRatio, 1), 0, 1);
     s.lastWaterRatio = Util.clamp(finiteNumber(data?.lastWaterRatio, 1), 0, 1);
+    s.days = Util.clamp(Math.floor(finiteNumber(data?.days, 0)), 0, 1000000);
+    s.gx = Number.isInteger(data?.gx) && Math.abs(data.gx) <= 1000
+      ? data.gx
+      : null;
+    s.gy = Number.isInteger(data?.gy) && Math.abs(data.gy) <= 1000
+      ? data.gy
+      : null;
     s.health = Util.clamp(Number.isFinite(Number(s.health)) ? Number(s.health) : 100, 0, 100);
     s.hunger = Util.clamp(Number.isFinite(Number(s.hunger)) ? Number(s.hunger) : 80, 0, 100);
     s.thirst = Util.clamp(Number.isFinite(Number(s.thirst)) ? Number(s.thirst) : 80, 0, 100);

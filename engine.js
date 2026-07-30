@@ -30,6 +30,12 @@ const Util = {
     water: 'agua',
     fuel: 'combustible'
   })[key] || key,
+  escapeHtml: (value) => String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;'),
   pad: (s, n = 2) => String(s).padStart(n, '0'),
 };
 
@@ -385,7 +391,7 @@ const Log = {
     container.innerHTML = Log.entries.map(e => {
       const d = new Date(e.time);
       const t = `${Util.pad(d.getHours())}:${Util.pad(d.getMinutes())}`;
-      return `<div class="log-entry"><span class="time">${t}</span>${e.text}</div>`;
+      return `<div class="log-entry"><span class="time">${t}</span>${Util.escapeHtml(e.text)}</div>`;
     }).join('');
   }
 };

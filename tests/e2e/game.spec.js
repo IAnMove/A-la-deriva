@@ -37,8 +37,8 @@ test('migra un guardado v1 y conserva la continuación', async ({ page }) => {
   await expect(page.locator('#btn-continue')).toBeEnabled();
   await page.locator('#btn-continue').click();
   await expect(page.locator('#day-label')).toContainText('Día 3');
-  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('aladeriva3d_save_v2')));
-  expect(saved.schemaVersion).toBe(2);
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('aladeriva3d_save_v3')));
+  expect(saved.schemaVersion).toBe(3);
   expect(await page.evaluate(() => localStorage.getItem('aladeriva3d_save_v1'))).toBeNull();
   expect(errors).toEqual([]);
 });
@@ -52,8 +52,8 @@ test('autoguarda al ocultar la página y tolera preferencias dañadas', async ({
   await page.reload();
   await page.locator('#btn-new-game').click();
   await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide')));
-  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('aladeriva3d_save_v2')));
-  expect(saved.schemaVersion).toBe(2);
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('aladeriva3d_save_v3')));
+  expect(saved.schemaVersion).toBe(3);
   expect(saved.day).toBe(1);
   expect(errors).toEqual([]);
 });
@@ -189,14 +189,14 @@ test('protege un guardado futuro sin sustituirlo por el legacy', async ({ page }
   const legacyRaw = '{"day":4,"resources":{"wood":8}}';
   await page.evaluate(({ futureRaw, legacyRaw }) => {
     localStorage.clear();
-    localStorage.setItem('aladeriva3d_save_v2', futureRaw);
+    localStorage.setItem('aladeriva3d_save_v3', futureRaw);
     localStorage.setItem('aladeriva3d_save_v1', legacyRaw);
   }, { futureRaw, legacyRaw });
   await page.reload();
   await expect(page.locator('#btn-continue')).toBeDisabled();
   await expect(page.locator('#btn-continue')).toContainText('versión más reciente');
   const stored = await page.evaluate(() => ({
-    current: localStorage.getItem('aladeriva3d_save_v2'),
+    current: localStorage.getItem('aladeriva3d_save_v3'),
     legacy: localStorage.getItem('aladeriva3d_save_v1')
   }));
   expect(stored).toEqual({ current: futureRaw, legacy: legacyRaw });

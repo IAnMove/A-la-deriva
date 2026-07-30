@@ -100,7 +100,9 @@ run(`
   var AudioSys = { play() {}, isEnabled: () => true, setEnabled() {} };
   var Save = {
     saveCalls: 0,
+    clearCalls: 0,
     save() { this.saveCalls++; return true; },
+    clear() { this.clearCalls++; },
     loadBest: () => 0,
     saveBest() {},
     load: () => null,
@@ -118,6 +120,15 @@ run(`
   Game.updateUI = () => {};
   Game.closeAllModals();
 `);
+
+test('el registro escapa texto externo antes de insertarlo en el DOM', () => {
+  const container = makeElement();
+  sandbox.logContainerFixture = container;
+  run(`Log.clear(); Log.add('<img src=x onerror="globalThis.injected=true">&');`);
+  run('Log.render(logContainerFixture)');
+  assert.match(container.innerHTML, /&lt;img src=x onerror=&quot;globalThis\.injected=true&quot;&gt;&amp;/);
+  assert.doesNotMatch(container.innerHTML, /<img/);
+});
 
 test('Game delega simulación e interfaz en módulos independientes', () => {
   const gameSource = fs.readFileSync(path.join(root, 'game.js'), 'utf8');
@@ -714,7 +725,11 @@ test('guardados inválidos se sanean', () => {
     Game.loadFromSave({
       day: 'incorrecto', time: 99, zone: 'zona-inexistente',
       player: { x: 'NaN', health: -20, foodCredit: 99, speed: 0, hookRange: 999 },
-      resources: { wood: -4, water: '2.5', fuel: -8 },
+      resources: { wood: -4, water: '2.5', plastic: 'Infinity', fuel: -8 },
+      weatherTimers: { storm: {}, rain: 'Infinity', fog: -5, heat: 4 },
+      worldOffset: 'Infinity',
+      worldOffsetZ: {},
+      stats: { rescued: 'Infinity', deathCause: { unsafe: true } },
       navigationHeading: 99,
       raftGrid: [
         null,
@@ -733,7 +748,16 @@ test('guardados inválidos se sanean', () => {
   assert.equal(run('Game.player.speed'), 6);
   assert.equal(run('Game.player.hookRange'), 8);
   assert.equal(run('Game.resources.wood'), 0);
+  assert.equal(run('Game.resources.plastic'), 0);
   assert.equal(run('Game.resources.fuel'), 0);
+  assert.equal(run('Game.weatherTimers.storm'), 0);
+  assert.equal(run('Game.weatherTimers.rain'), 0);
+  assert.equal(run('Game.weatherTimers.fog'), 0);
+  assert.equal(run('Game.weatherTimers.heat'), 4);
+  assert.equal(run('Game.worldOffset'), 0);
+  assert.equal(run('Game.worldOffsetZ'), 0);
+  assert.equal(run('Game.stats.rescued'), 0);
+  assert.equal(run('Game.stats.deathCause'), '');
   assert.equal(run('Game.navigationHeading'), 1);
   assert.equal(run('Game.raft.grid.size'), 1);
   assert.equal(run('Game.raft.selected'), null);
@@ -754,12 +778,15 @@ test('guardados inválidos se sanean', () => {
     var fallbackPlayerCellFixture =
       Game.raft.worldToGrid(Game.player.x, Game.player.z);
     var sanitizedCrewStateFixture = Survivor.fromData({
-      name: 'Estado inválido',
+      name: '  ' + 'N'.repeat(100) + '  ',
       skill: { key: 'medic' },
       job: 'imposible',
       trust: 999,
       stress: -50,
       deprivationDays: 999,
+      days: 'Infinity',
+      gx: 0.5,
+      gy: 5000,
       hostile: true
     });
   `);
@@ -773,6 +800,10 @@ test('guardados inválidos se sanean', () => {
   assert.equal(run('sanitizedCrewStateFixture.trust'), 100);
   assert.equal(run('sanitizedCrewStateFixture.stress'), 0);
   assert.equal(run('sanitizedCrewStateFixture.deprivationDays'), 30);
+  assert.equal(run('sanitizedCrewStateFixture.name.length'), 80);
+  assert.equal(run('sanitizedCrewStateFixture.days'), 0);
+  assert.equal(run('sanitizedCrewStateFixture.gx'), null);
+  assert.equal(run('sanitizedCrewStateFixture.gy'), null);
   assert.equal(run('sanitizedCrewStateFixture.hostile'), true);
 });
 
@@ -918,6 +949,7 @@ test('la privación provoca alucinaciones y una crisis hostil telegrafiada', () 
   run(`
     var deprivedFixture = new Survivor();
     deprivedFixture.name = 'Mara Sedienta';
+    deprivedFixture.trait = TRAITS.find(trait => trait.key === 'optimist');
     deprivedFixture.health = 100;
     deprivedFixture.hunger = 80;
     deprivedFixture.thirst = 80;
@@ -1007,6 +1039,101 @@ test('las confrontaciones permiten calmar, reducir o morir en el forcejeo', () =
   assert.equal(run('crewVictimAliveFixture'), false);
   assert.equal(run('Game.state'), 'end');
   assert.match(run('conflictDeathCauseFixture'), /crisis/i);
+});
+
+test('guardar durante una crisis restaura pelea, objetivo y resumen pendiente', () => {
+  resetRaft([
+    ['0,0', 'floor', 50],
+    ['1,0', 'floor', 50]
+  ]);
+  run(`
+    Game.state = 'playing';
+    Game.resetPlayerState({ health: 100, stamina: 80 });
+    Game.resources.food = 1;
+    Game.resources.water = 1;
+    var savedAggressorFixture = new Survivor();
+    savedAggressorFixture.name = 'Agresor guardado';
+    savedAggressorFixture.criticalDays = 2;
+    savedAggressorFixture.hostile = true;
+    var savedTargetFixture = new Survivor();
+    savedTargetFixture.name = 'Objetivo guardado';
+    CrewManager.members = [savedAggressorFixture, savedTargetFixture];
+    Game.startCrewConflict(savedAggressorFixture, 'crisis persistente');
+    Game.crewConflict.tension = 37;
+    Game.crewConflict.timeLeft = 4.5;
+    Game.pendingDaySummary = {
+      food: 1,
+      water: 1.3,
+      events: ['heat', 'evento-inválido'],
+      crewNotes: ['Nota pendiente']
+    };
+    var activeConflictSaveFixture = Game.getSaveData();
+    Game.loadFromSave(activeConflictSaveFixture);
+  `);
+  assert.equal(run('Game.crewConflict.active'), true);
+  assert.equal(run('Game.crewConflict.member.name'), 'Agresor guardado');
+  assert.equal(run('Game.crewConflict.target.name'), 'Objetivo guardado');
+  assert.equal(run('Game.crewConflict.tension'), 37);
+  assert.equal(run('Game.crewConflict.timeLeft'), 4.5);
+  assert.equal(run('Game.pendingDaySummary.crewNotes[0]'), 'Nota pendiente');
+  assert.equal(run('Game.pendingDaySummary.events.length'), 1);
+  assert.equal(run('Game.paused'), true);
+  run('Game.closeAllModals();');
+});
+
+test('si un evento mata al agresor pendiente el día se cierra y guarda', () => {
+  resetRaft([['0,0', 'floor', 50]]);
+  run(`
+    var interruptedAggressorFixture = new Survivor();
+    interruptedAggressorFixture.name = 'Agresor accidentado';
+    interruptedAggressorFixture.health = 18;
+    interruptedAggressorFixture.hostile = true;
+    CrewManager.members = [interruptedAggressorFixture];
+    Game.resetPlayerState({
+      health: 100, hunger: 90, thirst: 90, morale: 75, sanity: 100
+    });
+    Game.resources = {
+      wood: 0, plastic: 0, cloth: 0, metal: 0,
+      rope: 0, food: 2, water: 2, fuel: 0
+    };
+    Game.day = 2;
+    Game.zone = 'calm';
+    Game.state = 'playing';
+    Game.victoryCondition = null;
+    var interruptedStoryFixture = CrewManager.resolveStoryEvents;
+    var interruptedWorkFixture = CrewManager.applyDailyWork;
+    var interruptedBehaviorFixture = CrewManager.resolveDailyBehavior;
+    var interruptedEventsFixture = Game.pickDailyEvents;
+    var interruptedSummaryFixture = Game.showDaySummary;
+    var interruptedRandomFixture = Math.random;
+    var interruptedSummaryShownFixture = false;
+    CrewManager.resolveStoryEvents = () => [];
+    CrewManager.applyDailyWork = () => [];
+    CrewManager.resolveDailyBehavior = () => ({
+      messages: ['La crisis iba a comenzar.'],
+      conflict: {
+        member: interruptedAggressorFixture,
+        cause: 'crisis interrumpida'
+      }
+    });
+    Game.pickDailyEvents = () => ['lost'];
+    Game.showDaySummary = () => { interruptedSummaryShownFixture = true; };
+    Math.random = () => 0;
+    var interruptedSaveBeforeFixture = Save.saveCalls;
+    Game.endDay();
+    Math.random = interruptedRandomFixture;
+    CrewManager.resolveStoryEvents = interruptedStoryFixture;
+    CrewManager.applyDailyWork = interruptedWorkFixture;
+    CrewManager.resolveDailyBehavior = interruptedBehaviorFixture;
+    Game.pickDailyEvents = interruptedEventsFixture;
+    Game.showDaySummary = interruptedSummaryFixture;
+  `);
+  assert.equal(run('interruptedAggressorFixture.alive'), false);
+  assert.equal(run('interruptedAggressorFixture.hostile'), false);
+  assert.equal(run('Game.crewConflict.active'), false);
+  assert.equal(run('Game.pendingDaySummary'), null);
+  assert.equal(run('interruptedSummaryShownFixture'), true);
+  assert.equal(run('Save.saveCalls'), run('interruptedSaveBeforeFixture + 1'));
 });
 
 test('minijuego de pesca pausa el mundo y resuelve captura o escape', () => {
@@ -1374,6 +1501,18 @@ test('volver al menú guarda y un slot futuro no se sobrescribe al continuar', (
   assert.equal(run('brokenContinueFixture'), false);
   assert.equal(run('brokenSaveAfterFixture'), run('brokenSaveBeforeFixture'));
   assert.equal(run('Game.state'), 'start');
+});
+
+test('una partida terminada no deja un guardado que permita deshacer el desenlace', () => {
+  run(`
+    var terminalClearBeforeFixture = Save.clearCalls;
+    Game.stats.deathCause = 'Prueba terminal';
+    Game.triggerLose();
+    Game.state = 'playing';
+    Game.triggerWin('radio');
+  `);
+  assert.equal(run('Save.clearCalls'), run('terminalClearBeforeFixture + 2'));
+  assert.equal(run('Game.state'), 'end');
 });
 
 console.log('Todas las pruebas jugables han pasado.');

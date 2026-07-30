@@ -3,9 +3,9 @@
  *****************************************************/
 
 const Save = {
-  SCHEMA_VERSION: 2,
-  KEY: 'aladeriva3d_save_v2',
-  LEGACY_KEYS: ['aladeriva3d_save_v1'],
+  SCHEMA_VERSION: 3,
+  KEY: 'aladeriva3d_save_v3',
+  LEGACY_KEYS: ['aladeriva3d_save_v2', 'aladeriva3d_save_v1'],
   BEST: 'aladeriva3d_best_v1',
   PREFS: 'aladeriva3d_prefs_v2',
   LEGACY_PREFS: ['aladeriva3d_prefs_v1'],
@@ -62,7 +62,7 @@ const Save = {
       return null;
     }
     const clean = Save.sanitize(data);
-    // v1 no tenía metadatos. La forma de los datos de juego se conserva para
+    // Las versiones anteriores conservan la forma de los datos de juego para
     // que Game.loadFromSave siga siendo el único responsable de reconstruirlos.
     clean.schemaVersion = Save.SCHEMA_VERSION;
     clean.savedAt = typeof clean.savedAt === 'string' ? clean.savedAt : null;

@@ -263,16 +263,24 @@ const Game = {
 
   loadFromSave: (data) => {
     if (Game.fishing?.active) Game.cancelFishing(false);
+    const finite = (value, fallback = 0) => {
+      const number = Number(value);
+      return Number.isFinite(number) ? number : fallback;
+    };
     Game.paused = false;
-    Game.day = Number.isFinite(data.day) ? Math.max(1, Math.floor(data.day)) : 1;
-    Game.time = Number.isFinite(data.time) ? Util.clamp(data.time, 0, 23.99) : 6;
+    Game.day = Util.clamp(Math.floor(finite(data.day, 1)), 1, 1000000);
+    Game.time = Util.clamp(finite(data.time, 6), 0, 23.99);
     Game.zone = ZONES.includes(data.zone) ? data.zone : 'calm';
-    Game.zoneTimer = Number.isFinite(data.zoneTimer) ? Math.max(1, data.zoneTimer) : 30;
+    Game.zoneTimer = Util.clamp(finite(data.zoneTimer, 30), 1, 86400);
     Game.weatherTimers = {
-      storm: Math.max(0, data.weatherTimers?.storm || (data.storm ? 10 : 0)),
-      rain: Math.max(0, data.weatherTimers?.rain || 0),
-      fog: Math.max(0, data.weatherTimers?.fog || 0),
-      heat: Math.max(0, data.weatherTimers?.heat || 0)
+      storm: Util.clamp(
+        finite(data.weatherTimers?.storm, data.storm ? 10 : 0),
+        0,
+        86400
+      ),
+      rain: Util.clamp(finite(data.weatherTimers?.rain), 0, 86400),
+      fog: Util.clamp(finite(data.weatherTimers?.fog), 0, 86400),
+      heat: Util.clamp(finite(data.weatherTimers?.heat), 0, 86400)
     };
     Game.storm = Game.zone === 'storm' || Game.weatherTimers.storm > 0;
     Game.rain = Game.storm || Game.weatherTimers.rain > 0;
@@ -282,29 +290,31 @@ const Game = {
     const savedResources = data.resources || {};
     Game.resources = {};
     for (const key of RESOURCE_KEYS) {
-      Game.resources[key] = Math.max(0, Number(savedResources[key]) || 0);
+      Game.resources[key] = Util.clamp(finite(savedResources[key]), 0, 1000000);
     }
     Game.stats = {
-      rescued: Math.max(0, Number(data.stats?.rescued) || 0),
-      abandoned: Math.max(0, Number(data.stats?.abandoned) || 0),
-      gathered: Math.max(0, Number(data.stats?.gathered) || 0),
-      maxRaftSize: Math.max(1, Number(data.stats?.maxRaftSize) || 1),
-      deathCause: data.stats?.deathCause || ''
+      rescued: Util.clamp(Math.floor(finite(data.stats?.rescued)), 0, 1000000),
+      abandoned: Util.clamp(Math.floor(finite(data.stats?.abandoned)), 0, 1000000),
+      gathered: Util.clamp(finite(data.stats?.gathered), 0, 1000000),
+      maxRaftSize: Util.clamp(finite(data.stats?.maxRaftSize, 1), 1, 5000),
+      deathCause: typeof data.stats?.deathCause === 'string'
+        ? data.stats.deathCause.slice(0, 240)
+        : ''
     };
-    Game.rescuedSignal = Util.clamp(Number(data.rescuedSignal) || 0, 0, 100);
-    const savedIslandDistance = Number(data.islandDistance);
-    Game.islandDistance = Math.max(
-      0,
-      Number.isFinite(savedIslandDistance) ? savedIslandDistance : 2000
-    );
-    Game.radioIntel = Util.clamp(Number(data.radioIntel) || 0, 0, 40);
-    Game.navigationIntel = Util.clamp(Number(data.navigationIntel) || 0, 0, 120);
+    Game.rescuedSignal = Util.clamp(finite(data.rescuedSignal), 0, 100);
+    Game.islandDistance = Util.clamp(finite(data.islandDistance, 2000), 0, 10000000);
+    Game.radioIntel = Util.clamp(finite(data.radioIntel), 0, 40);
+    Game.navigationIntel = Util.clamp(finite(data.navigationIntel), 0, 120);
     Game.victoryCondition = ['radio', 'island'].includes(data.victoryCondition) ? data.victoryCondition : null;
-    Game.currentObjective = Util.clamp(Number(data.currentObjective) || 0, 0, Game.objectives.length - 1);
-    Game.worldOffset = Number(data.worldOffset) || 0;
-    Game.worldOffsetZ = Number(data.worldOffsetZ) || 0;
+    Game.currentObjective = Util.clamp(
+      Math.floor(finite(data.currentObjective)),
+      0,
+      Game.objectives.length - 1
+    );
+    Game.worldOffset = Util.clamp(finite(data.worldOffset), -10000000, 10000000);
+    Game.worldOffsetZ = Util.clamp(finite(data.worldOffsetZ), -10000000, 10000000);
     Game.navigationHeading = Util.clamp(
-      Number.isFinite(Number(data.navigationHeading)) ? Number(data.navigationHeading) : 0,
+      finite(data.navigationHeading),
       -NAVIGATION_BALANCE.maxHeading,
       NAVIGATION_BALANCE.maxHeading
     );
@@ -323,12 +333,16 @@ const Game = {
           BUILDINGS[v?.buildingKey] &&
           Game.raft.placeAt(gx, gy, v.buildingKey, true)) {
         const cell = Game.raft.get(gx, gy);
-        cell.maxHealth = Math.max(
+        cell.maxHealth = Util.clamp(
+          finite(v.maxHealth, BUILDINGS[v.buildingKey].health),
           BUILDINGS[v.buildingKey].health,
-          Number(v.maxHealth) || BUILDINGS[v.buildingKey].health
+          10000
         );
-        const savedHealth = Number(v.health);
-        cell.health = Util.clamp(Number.isFinite(savedHealth) ? savedHealth : cell.maxHealth, 0, cell.maxHealth);
+        cell.health = Util.clamp(
+          finite(v.health, cell.maxHealth),
+          0,
+          cell.maxHealth
+        );
         Game.raft.tintDamaged(cell);
       }
     }
@@ -349,11 +363,120 @@ const Game = {
     BuildManager.close();
     Game.closeAllModals();
     Game.resetTransientState();
+    Game.restoreSavedConflict(data);
     Game.highlightsDirty = true;
     Log.add('Partida cargada.');
   },
 
+  restoreSavedConflict: (data) => {
+    for (const member of CrewManager.members) member.hostile = false;
+    const saved = data?.crewConflict;
+    if (!saved?.active) return false;
+    const finite = (value, fallback = 0) => {
+      const number = Number(value);
+      return Number.isFinite(number) ? number : fallback;
+    };
+    const memberIndex = Number(saved.memberIndex);
+    if (!Number.isInteger(memberIndex)) return false;
+    const member = CrewManager.members[memberIndex];
+    if (!member?.alive) return false;
+
+    let target = Game.player;
+    if (saved.targetType === 'crew') {
+      const targetIndex = Number(saved.targetIndex);
+      const savedTarget = Number.isInteger(targetIndex)
+        ? CrewManager.members[targetIndex]
+        : null;
+      if (savedTarget?.alive && savedTarget !== member) target = savedTarget;
+    }
+    member.hostile = true;
+    Game.crewConflict = {
+      active: true,
+      member,
+      target,
+      cause: typeof saved.cause === 'string' && saved.cause
+        ? saved.cause.slice(0, 160)
+        : 'delirio por privación',
+      tension: Util.clamp(finite(saved.tension, 62), 1, 100),
+      timeLeft: Util.clamp(finite(saved.timeLeft, 9), 0.1, 12),
+      pushCooldown: Util.clamp(finite(saved.pushCooldown), 0, 1),
+      feedback: typeof saved.feedback === 'string' && saved.feedback
+        ? saved.feedback.slice(0, 240)
+        : 'La confrontación continúa.'
+    };
+
+    const summary = data?.pendingDaySummary;
+    Game.pendingDaySummary = summary && typeof summary === 'object'
+      ? {
+          food: Util.clamp(finite(summary.food), 0, 1000000),
+          water: Util.clamp(finite(summary.water), 0, 1000000),
+          events: Array.isArray(summary.events)
+            ? summary.events
+                .slice(0, 12)
+                .map(String)
+                .filter(event => [
+                  'storm', 'shark', 'sick', 'argument', 'lost', 'gift',
+                  'debris', 'heat', 'wave', 'bird', 'ship'
+                ].includes(event))
+            : [],
+          crewNotes: Array.isArray(summary.crewNotes)
+            ? summary.crewNotes
+                .slice(0, 80)
+                .map(note => String(note).slice(0, 500))
+            : []
+        }
+      : null;
+    Game.paused = true;
+    const panel = document.getElementById('crew-conflict-panel');
+    if (panel) panel.classList.remove('hidden');
+    GameUI.updateCrewConflictUI(Game);
+    return true;
+  },
+
   getSaveData: () => {
+    const conflict = Game.crewConflict?.active
+      ? {
+          active: true,
+          memberIndex: CrewManager.members.indexOf(Game.crewConflict.member),
+          targetType:
+            Game.crewConflict.target === Game.player ? 'player' : 'crew',
+          targetIndex:
+            Game.crewConflict.target === Game.player
+              ? -1
+              : CrewManager.members.indexOf(Game.crewConflict.target),
+          cause: String(Game.crewConflict.cause || '').slice(0, 160),
+          tension: Util.clamp(
+            Number(Game.crewConflict.tension) || 0,
+            0,
+            100
+          ),
+          timeLeft: Util.clamp(
+            Number(Game.crewConflict.timeLeft) || 0,
+            0,
+            12
+          ),
+          pushCooldown: Util.clamp(
+            Number(Game.crewConflict.pushCooldown) || 0,
+            0,
+            1
+          ),
+          feedback: String(Game.crewConflict.feedback || '').slice(0, 240)
+        }
+      : null;
+    const pendingDaySummary = conflict && Game.pendingDaySummary
+      ? {
+          food: Math.max(0, Number(Game.pendingDaySummary.food) || 0),
+          water: Math.max(0, Number(Game.pendingDaySummary.water) || 0),
+          events: Array.isArray(Game.pendingDaySummary.events)
+            ? Game.pendingDaySummary.events.slice(0, 12).map(String)
+            : [],
+          crewNotes: Array.isArray(Game.pendingDaySummary.crewNotes)
+            ? Game.pendingDaySummary.crewNotes
+                .slice(0, 80)
+                .map(note => String(note).slice(0, 500))
+            : []
+        }
+      : null;
     return {
       day: Game.day,
       time: Game.time,
@@ -375,6 +498,8 @@ const Game = {
         { buildingKey: v.buildingKey, health: v.health, maxHealth: v.maxHealth }
       ]),
       crew: CrewManager.members.map(m => ({ ...m, mesh: null })),
+      crewConflict: conflict,
+      pendingDaySummary,
       rescuedSignal: Game.rescuedSignal,
       islandDistance: Game.islandDistance,
       radioIntel: Game.radioIntel,
@@ -1782,17 +1907,22 @@ const Game = {
 
     Game.updateObjective();
     if (behaviorReport.conflict) {
-      Game.pendingDaySummary = {
-        food: foodConsumed,
-        water: waterConsumed,
-        events,
-        crewNotes: [...crewNotes]
-      };
-      Game.startCrewConflict(
+      const started = Game.startCrewConflict(
         behaviorReport.conflict.member,
         behaviorReport.conflict.cause
       );
-      return;
+      if (started) {
+        Game.pendingDaySummary = {
+          food: foodConsumed,
+          water: waterConsumed,
+          events,
+          crewNotes: [...crewNotes]
+        };
+        Save.save(Game.getSaveData());
+        return;
+      }
+      behaviorReport.conflict.member.hostile = false;
+      Game.pendingDaySummary = null;
     }
     Save.save(Game.getSaveData());
     Game.showDaySummary(foodConsumed, waterConsumed, events, crewNotes);
@@ -1966,6 +2096,7 @@ const Game = {
     document.getElementById('end-cause').textContent = cause;
     const score = Game.calculateScore(true);
     Save.saveBest(score);
+    Save.clear();
     document.getElementById('end-stats').innerHTML = Game.endStatsHtml(true, score);
     Game.setState('end');
   },
@@ -1979,6 +2110,7 @@ const Game = {
     document.getElementById('end-cause').textContent = Game.stats.deathCause;
     const score = Game.calculateScore(false);
     Save.saveBest(score);
+    Save.clear();
     document.getElementById('end-stats').innerHTML = Game.endStatsHtml(false, score);
     Game.setState('end');
   },
