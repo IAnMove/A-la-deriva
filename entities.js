@@ -147,54 +147,349 @@ class FloatingObject {
 }
 
 let DangerMeshTemplate = null;
+let DangerTargetTemplate = null;
 
 function makeDangerMesh() {
   if (!DangerMeshTemplate) {
     DangerMeshTemplate = new THREE.Group();
-    const fin = new THREE.Mesh(new THREE.ConeGeometry(0.35, 0.9, 4), mat(0x455a64));
+    const fin = new THREE.Mesh(
+      new THREE.ConeGeometry(0.35, 0.9, 4),
+      mat(0x455a64)
+    );
     fin.scale.z = 0.35;
     fin.position.y = 0.35;
     DangerMeshTemplate.add(fin);
-    const body = new THREE.Mesh(new THREE.SphereGeometry(0.5, 6, 5), mat(0x546e7a));
+    const body = new THREE.Mesh(
+      new THREE.SphereGeometry(0.5, 6, 5),
+      mat(0x546e7a)
+    );
     body.scale.set(1.6, 0.4, 0.8);
     body.position.y = 0.05;
     DangerMeshTemplate.add(body);
+    const warning = new THREE.Mesh(
+      new THREE.RingGeometry(0.72, 0.94, 24),
+      new THREE.MeshBasicMaterial({
+        color: 0xff5252,
+        transparent: true,
+        opacity: 0.72,
+        depthWrite: false,
+        side: THREE.DoubleSide
+      })
+    );
+    warning.name = 'shark-warning';
+    warning.rotation.x = -Math.PI / 2;
+    warning.position.y = 0.08;
+    warning.visible = false;
+    DangerMeshTemplate.add(warning);
     DangerMeshTemplate.traverse(o => {
       if (o.geometry || o.material) o.userData.sharedEntityResource = true;
     });
   }
-  return DangerMeshTemplate.clone(true);
+  const mesh = DangerMeshTemplate.clone(true);
+  const warning = mesh.getObjectByName('shark-warning');
+  if (warning?.material) warning.material = warning.material.clone();
+  return mesh;
+}
+
+function makeDangerTarget() {
+  if (!DangerTargetTemplate) {
+    DangerTargetTemplate = new THREE.Group();
+    const outer = new THREE.Mesh(
+      new THREE.RingGeometry(0.55, 0.72, 28),
+      new THREE.MeshBasicMaterial({
+        color: 0xff5252,
+        transparent: true,
+        opacity: 0.82,
+        depthWrite: false,
+        side: THREE.DoubleSide
+      })
+    );
+    outer.rotation.x = -Math.PI / 2;
+    outer.name = 'target-ring';
+    DangerTargetTemplate.add(outer);
+    const crossMaterial = new THREE.MeshBasicMaterial({
+      color: 0xffebee,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false
+    });
+    const crossA = new THREE.Mesh(
+      new THREE.BoxGeometry(1.1, 0.025, 0.08),
+      crossMaterial
+    );
+    crossA.position.y = 0.02;
+    DangerTargetTemplate.add(crossA);
+    const crossB = crossA.clone();
+    crossB.rotation.y = Math.PI / 2;
+    DangerTargetTemplate.add(crossB);
+    DangerTargetTemplate.traverse(o => {
+      if (o.geometry || o.material) o.userData.sharedEntityResource = true;
+    });
+  }
+  const marker = DangerTargetTemplate.clone(true);
+  marker.visible = false;
+  return marker;
 }
 
 class Danger {
   constructor(x, z, type, scene) {
     this.x = x;
     this.z = z;
-    this.type = type; // 'shark'
+    this.type = type;
     this.radius = 0.9;
     this.vx = Util.rand(-2, -1);
     this.vz = Util.rand(-0.4, 0.4);
-    this.life = 30;
+    this.life = 40;
     this.active = true;
-    // Aleta de tiburón
+    this.state = 'approach';
+    this.attackTimer = 0;
+    this.chargeTimer = 0;
+    this.targetId = null;
+    this.targetName = '';
+    this.targetType = null;
+    this.lockedX = x;
+    this.lockedZ = z;
+    this.justLocked = false;
+    this.resolved = false;
     this.mesh = makeDangerMesh();
+    this.warningMesh = this.mesh.getObjectByName('shark-warning');
+    this.targetMarker = makeDangerTarget();
     this.mesh.position.set(x, 0, z);
     scene.add(this.mesh);
+    scene.add(this.targetMarker);
   }
 
-  update(dt, currentSpeed, currentSpeedZ, time) {
-    this.x += (this.vx - currentSpeed) * dt;
-    this.z += (this.vz - currentSpeedZ) * dt;
-    this.life -= dt;
+  lockTarget(targets) {
+    if (!Array.isArray(targets) || targets.length === 0) return false;
+    const target = targets.reduce((best, candidate) => {
+      const score =
+        Math.abs(candidate.z - this.z) * 1.6 +
+        Math.hypot(candidate.x - this.x, candidate.z - this.z) * 0.15;
+      return !best || score < best.score ? { target: candidate, score } : best;
+    }, null)?.target;
+    if (!target) return false;
+    this.targetId = target.id;
+    this.targetName = target.name;
+    this.targetType = target.type;
+    this.lockedX = target.x;
+    this.lockedZ = target.z;
+    this.state = 'telegraph';
+    this.attackTimer = 2.4;
+    this.justLocked = true;
+    this.targetMarker.visible = true;
+    return true;
+  }
+
+  beginCharge(target) {
+    if (target) {
+      this.lockedX = target.x;
+      this.lockedZ = target.z;
+    }
+    const dx = this.lockedX - this.x;
+    const dz = this.lockedZ - this.z;
+    const distance = Math.hypot(dx, dz) || 1;
+    this.vx = dx / distance * 5.4;
+    this.vz = dz / distance * 5.4;
+    this.state = 'charge';
+    this.chargeTimer = 3.2;
+    this.targetMarker.visible = true;
+  }
+
+  beginFlee(sourceX = this.lockedX, sourceZ = this.lockedZ) {
+    const dx = this.x - sourceX;
+    const dz = this.z - sourceZ;
+    const distance = Math.hypot(dx, dz) || 1;
+    this.vx = dx / distance * 4.2;
+    this.vz = dz / distance * 4.2;
+    this.state = 'flee';
+    this.resolved = true;
+    this.targetMarker.visible = false;
+    this.life = Math.min(this.life, 3.5);
+  }
+
+  scareFrom(sourceX, sourceZ) {
+    if (!this.active || this.state === 'flee') return false;
+    this.beginFlee(sourceX, sourceZ);
+    return true;
+  }
+
+  update(dt, currentSpeed, currentSpeedZ, time, center, targets = []) {
+    const safeDt = Math.max(0, Math.min(dt || 0, 0.1));
+    const target = targets.find(candidate => candidate.id === this.targetId);
+
+    if (this.state === 'approach') {
+      this.x += (this.vx - currentSpeed) * safeDt;
+      this.z += (this.vz - currentSpeedZ) * safeDt;
+      if (center && Math.hypot(this.x - center.x, this.z - center.z) <= 13) {
+        this.lockTarget(targets);
+      }
+    } else if (this.state === 'telegraph') {
+      if (target) {
+        this.lockedX = target.x;
+        this.lockedZ = target.z;
+      }
+      const dx = this.lockedX - this.x;
+      const dz = this.lockedZ - this.z;
+      const distance = Math.hypot(dx, dz) || 1;
+      const stalkSpeed = distance > 4.5 ? 0.85 : 0.28;
+      this.x += (dx / distance * stalkSpeed - currentSpeed) * safeDt;
+      this.z += (dz / distance * stalkSpeed - currentSpeedZ) * safeDt;
+      this.attackTimer = Math.max(0, this.attackTimer - safeDt);
+      if (this.attackTimer <= 0) this.beginCharge(target);
+    } else {
+      this.x += (this.vx - currentSpeed) * safeDt;
+      this.z += (this.vz - currentSpeedZ) * safeDt;
+      if (this.state === 'charge') {
+        this.chargeTimer = Math.max(0, this.chargeTimer - safeDt);
+        if (this.chargeTimer <= 0) this.beginFlee();
+      }
+    }
+
+    this.life -= safeDt;
     if (this.life <= 0) this.active = false;
     this.mesh.position.x = this.x;
     this.mesh.position.z = this.z;
-    this.mesh.position.y = World.waveHeight(this.x, this.z, time, Game.worldOffset, Game.worldOffsetZ) * World.waveAmp;
+    this.mesh.position.y =
+      World.waveHeight(
+        this.x,
+        this.z,
+        time,
+        Game.worldOffset,
+        Game.worldOffsetZ
+      ) * World.waveAmp;
     this.mesh.rotation.y = Math.atan2(this.vx, this.vz);
+    if (this.warningMesh) {
+      this.warningMesh.visible =
+        this.state === 'telegraph' || this.state === 'charge';
+      const warningPulse = 1 + Math.sin(time * 9) * 0.18;
+      this.warningMesh.scale.setScalar(warningPulse);
+      this.warningMesh.material.opacity =
+        this.state === 'charge' ? 0.95 : 0.55 + Math.sin(time * 7) * 0.2;
+    }
+    if (this.targetMarker.visible) {
+      this.targetMarker.position.set(
+        this.lockedX,
+        World.waveHeight(
+          this.lockedX,
+          this.lockedZ,
+          time,
+          Game.worldOffset,
+          Game.worldOffsetZ
+        ) * World.waveAmp + 0.08,
+        this.lockedZ
+      );
+      const markerPulse = 1 + Math.sin(time * 8) * 0.15;
+      this.targetMarker.scale.setScalar(markerPulse);
+      this.targetMarker.rotation.y += safeDt * 1.6;
+    }
   }
 
   dispose(scene) {
     scene.remove(this.mesh);
+    scene.remove(this.targetMarker);
+    if (this.warningMesh?.material?.dispose) this.warningMesh.material.dispose();
+  }
+}
+
+let ReefMeshTemplate = null;
+
+function makeReefMesh() {
+  if (!ReefMeshTemplate) {
+    ReefMeshTemplate = new THREE.Group();
+    const rockMaterial = mat(0x546e7a);
+    for (let index = 0; index < 5; index++) {
+      const rock = new THREE.Mesh(
+        new THREE.DodecahedronGeometry(Util.rand(0.42, 0.82), 0),
+        rockMaterial
+      );
+      rock.position.set(
+        Util.rand(-0.8, 0.8),
+        Util.rand(-0.2, 0.05),
+        Util.rand(-0.65, 0.65)
+      );
+      rock.scale.y = Util.rand(0.45, 0.8);
+      ReefMeshTemplate.add(rock);
+    }
+    const coralColors = [0xff6f61, 0xffca28, 0xab47bc, 0x26c6da];
+    for (let index = 0; index < 7; index++) {
+      const height = Util.rand(0.45, 1.05);
+      const branch = cyl(
+        0.07,
+        0.13,
+        height,
+        coralColors[index % coralColors.length],
+        Util.rand(-0.75, 0.75),
+        height * 0.35,
+        Util.rand(-0.55, 0.55),
+        6
+      );
+      branch.rotation.z = Util.rand(-0.35, 0.35);
+      ReefMeshTemplate.add(branch);
+    }
+    const warningRing = new THREE.Mesh(
+      new THREE.RingGeometry(1.1, 1.35, 32),
+      new THREE.MeshBasicMaterial({
+        color: 0xffb300,
+        transparent: true,
+        opacity: 0.62,
+        depthWrite: false,
+        side: THREE.DoubleSide
+      })
+    );
+    warningRing.name = 'reef-warning';
+    warningRing.rotation.x = -Math.PI / 2;
+    warningRing.position.y = 0.04;
+    ReefMeshTemplate.add(warningRing);
+    ReefMeshTemplate.traverse(o => {
+      if (o.geometry || o.material) o.userData.sharedEntityResource = true;
+    });
+  }
+  const mesh = ReefMeshTemplate.clone(true);
+  const warning = mesh.getObjectByName('reef-warning');
+  if (warning?.material) warning.material = warning.material.clone();
+  return mesh;
+}
+
+class Reef {
+  constructor(x, z, scene) {
+    this.x = x;
+    this.z = z;
+    this.radius = 1.2;
+    this.life = 55;
+    this.active = true;
+    this.hit = false;
+    this.mesh = makeReefMesh();
+    this.warningMesh = this.mesh.getObjectByName('reef-warning');
+    this.mesh.position.set(x, -0.12, z);
+    this.mesh.rotation.y = Math.random() * Math.PI * 2;
+    scene.add(this.mesh);
+  }
+
+  update(dt, currentSpeed, currentSpeedZ, time) {
+    const safeDt = Math.max(0, Math.min(dt || 0, 0.1));
+    this.x -= currentSpeed * safeDt;
+    this.z -= currentSpeedZ * safeDt;
+    this.life -= safeDt;
+    if (this.life <= 0) this.active = false;
+    this.mesh.position.x = this.x;
+    this.mesh.position.z = this.z;
+    this.mesh.position.y =
+      World.waveHeight(
+        this.x,
+        this.z,
+        time,
+        Game.worldOffset,
+        Game.worldOffsetZ
+      ) * World.waveAmp - 0.18;
+    if (this.warningMesh) {
+      const pulse = 1 + Math.sin(time * 4 + this.x) * 0.08;
+      this.warningMesh.scale.setScalar(pulse);
+    }
+  }
+
+  dispose(scene) {
+    scene.remove(this.mesh);
+    if (this.warningMesh?.material?.dispose) this.warningMesh.material.dispose();
   }
 }
 
@@ -381,9 +676,11 @@ class FishBank {
 const EntityManager = {
   objects: [],
   dangers: [],
+  reefs: [],
   fishBanks: [],
   spawnTimer: 0,
   dangerTimer: 0,
+  reefTimer: 0,
   fishTimer: 0,
   scene: null,
 
@@ -392,12 +689,15 @@ const EntityManager = {
   reset: () => {
     for (const o of EntityManager.objects) o.dispose(EntityManager.scene);
     for (const d of EntityManager.dangers) d.dispose(EntityManager.scene);
+    for (const r of EntityManager.reefs) r.dispose(EntityManager.scene);
     for (const f of EntityManager.fishBanks) f.dispose(EntityManager.scene);
     EntityManager.objects = [];
     EntityManager.dangers = [];
+    EntityManager.reefs = [];
     EntityManager.fishBanks = [];
     EntityManager.spawnTimer = 0;
     EntityManager.dangerTimer = 0;
+    EntityManager.reefTimer = 0;
     EntityManager.fishTimer = 0;
   },
 
@@ -443,6 +743,16 @@ const EntityManager = {
     }
   },
 
+  spawnReef: (center) => {
+    const reef = new Reef(
+      center.x + Util.rand(18, 27),
+      center.z + Util.rand(-14, 14),
+      EntityManager.scene
+    );
+    EntityManager.reefs.push(reef);
+    return reef;
+  },
+
   spawnFishBank: (center) => {
     const x = center.x + 14;
     const z = center.z + Util.rand(-9, 9);
@@ -451,7 +761,16 @@ const EntityManager = {
     EntityManager.fishBanks.push(f);
   },
 
-  update: (dt, center, zone, day, currentSpeed, currentSpeedZ, time) => {
+  update: (
+    dt,
+    center,
+    zone,
+    day,
+    currentSpeed,
+    currentSpeedZ,
+    time,
+    hazardTargets = []
+  ) => {
     EntityManager.spawnTimer -= dt;
     if (EntityManager.spawnTimer <= 0) {
       const base = Math.max(0.8, 2.5 - day * 0.08);
@@ -463,6 +782,14 @@ const EntityManager = {
       const base = zone === 'sharks' ? 10 : (zone === 'storm' ? 6 : 14);
       EntityManager.dangerTimer = Util.rand(base, base * 1.8);
       EntityManager.spawnDanger(center, zone);
+    }
+    EntityManager.reefTimer -= dt;
+    if (EntityManager.reefTimer <= 0) {
+      const base = zone === 'reef' ? 8 : 24;
+      EntityManager.reefTimer = Util.rand(base, base * 1.7);
+      if (zone === 'reef' || Math.random() < 0.22) {
+        EntityManager.spawnReef(center);
+      }
     }
     EntityManager.fishTimer -= dt;
     if (EntityManager.fishTimer <= 0) {
@@ -480,10 +807,25 @@ const EntityManager = {
     }
     for (let i = EntityManager.dangers.length - 1; i >= 0; i--) {
       const d = EntityManager.dangers[i];
-      d.update(dt, currentSpeed, currentSpeedZ, time);
+      d.update(
+        dt,
+        currentSpeed,
+        currentSpeedZ,
+        time,
+        center,
+        hazardTargets
+      );
       if (!d.active || d.x < center.x - 30) {
         d.dispose(EntityManager.scene);
         EntityManager.dangers.splice(i, 1);
+      }
+    }
+    for (let i = EntityManager.reefs.length - 1; i >= 0; i--) {
+      const reef = EntityManager.reefs[i];
+      reef.update(dt, currentSpeed, currentSpeedZ, time);
+      if (!reef.active || reef.x < center.x - 30) {
+        reef.dispose(EntityManager.scene);
+        EntityManager.reefs.splice(i, 1);
       }
     }
     for (let i = EntityManager.fishBanks.length - 1; i >= 0; i--) {
@@ -494,5 +836,68 @@ const EntityManager = {
         EntityManager.fishBanks.splice(i, 1);
       }
     }
+  },
+
+  getThreatSummary: (center) => {
+    if (!center) return null;
+    const sharks = EntityManager.dangers
+      .filter(danger => danger.active && danger.state !== 'flee')
+      .map(danger => ({
+        danger,
+        distance: Math.hypot(danger.x - center.x, danger.z - center.z),
+        priority: danger.state === 'charge'
+          ? 4
+          : danger.state === 'telegraph'
+            ? 3
+            : 1
+      }))
+      .filter(entry => entry.distance <= 22)
+      .sort((a, b) => b.priority - a.priority || a.distance - b.distance);
+    if (sharks.length) {
+      const { danger, distance } = sharks[0];
+      if (danger.state === 'charge') {
+        return {
+          level: 'critical',
+          icon: '🦈',
+          title: 'Tiburón al ataque',
+          detail: `Objetivo: ${danger.targetName || 'la balsa'} · aléjate del marcador o usa el gancho`,
+          distance
+        };
+      }
+      if (danger.state === 'telegraph') {
+        return {
+          level: 'warning',
+          icon: '🦈',
+          title: 'Tiburón acechando',
+          detail: `${danger.targetName || 'Alguien'} está marcado · ataque en ${danger.attackTimer.toFixed(1)} s`,
+          distance
+        };
+      }
+      return {
+        level: 'caution',
+        icon: '🦈',
+        title: 'Aleta avistada',
+        detail: `Tiburón a ${distance.toFixed(0)} m`,
+        distance
+      };
+    }
+
+    const reef = EntityManager.reefs
+      .filter(candidate => candidate.active && !candidate.hit)
+      .map(candidate => ({
+        reef: candidate,
+        distance: Math.hypot(candidate.x - center.x, candidate.z - center.z)
+      }))
+      .filter(entry => entry.distance <= 30)
+      .sort((a, b) => a.distance - b.distance)[0];
+    if (!reef) return null;
+    const side = reef.reef.z < center.z ? 'babor' : 'estribor';
+    return {
+      level: reef.distance < 9 ? 'critical' : 'warning',
+      icon: '🪸',
+      title: 'Arrecife de coral',
+      detail: `${reef.distance.toFixed(0)} m por ${side} · desvía la balsa`,
+      distance: reef.distance
+    };
   }
 };

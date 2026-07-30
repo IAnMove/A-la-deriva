@@ -9,11 +9,18 @@
 <body>
   <!-- Pantalla inicial -->
   <div id="start-screen" class="screen active">
-    <div class="panel">
+    <div class="panel hero-panel">
+      <div class="brand-mark" aria-hidden="true">⛵</div>
+      <p class="eyebrow">Supervivencia oceánica</p>
       <h1>A la Deriva 3D</h1>
       <p class="tagline">Sobrevive en el océano, construye tu balsa y escapa.</p>
+      <div class="hero-features" aria-label="Características principales">
+        <span>Construye</span>
+        <span>Explora</span>
+        <span>Sobrevive</span>
+      </div>
       <div class="controls-help">
-        <h2>Controles</h2>
+        <h2>Manual de supervivencia</h2>
         <ul>
           <li><strong>WASD / Flechas</strong>: mover al náufrago</li>
           <li><strong>Ratón</strong>: apuntar el gancho / elegir celda de construcción</li>
@@ -27,6 +34,8 @@
           <li><strong>Vela</strong>: úsala con E junto a un timón operativo para iniciar la ruta a la isla</li>
           <li><strong>Timón</strong>: úsalo con E para alternar rumbo; remar lateralmente también lo corrige</li>
           <li><strong>Motor</strong>: usa E para transformar 1 plástico en 2 de combustible</li>
+          <li><strong>Tiburones</strong>: aléjate más de una casilla del marcador o golpéalos con el gancho</li>
+          <li><strong>Corales</strong>: desvía la balsa con el remo, timón o motor; encallar puede destruir módulos</li>
           <li><strong>B</strong>: abrir menú de construcción</li>
           <li><strong>Escape</strong>: cancelar colocación / cerrar menús</li>
           <li><strong>Espacio</strong>: pausar</li>
@@ -36,15 +45,15 @@
       </div>
       <div class="start-buttons">
         <button id="btn-new-game">Nueva partida</button>
-        <button id="btn-continue">Continuar guardado</button>
+        <button id="btn-continue" class="secondary">Continuar guardado</button>
       </div>
-      <p class="version">v1.6 · Rutas, guardados y progresión mejorados</p>
+      <p class="version">v1.7 · Amenazas y experiencia visual renovadas</p>
     </div>
   </div>
 
   <!-- Pantalla de fin -->
   <div id="end-screen" class="screen">
-    <div class="panel">
+    <div class="panel result-panel">
       <h1 id="end-title">Fin de la partida</h1>
       <p id="end-cause"></p>
       <div id="end-stats"></div>
@@ -55,7 +64,8 @@
 
   <!-- Pantalla de pausa -->
   <div id="pause-screen" class="screen">
-    <div class="panel small">
+    <div class="panel small pause-panel">
+      <p class="eyebrow">Partida detenida</p>
       <h2>Pausa</h2>
       <button id="btn-resume">Continuar</button>
       <button id="btn-save">Guardar partida</button>
@@ -69,22 +79,28 @@
   <!-- Overlays de efectos a pantalla completa -->
   <div id="fx-heat"></div>
   <div id="fx-hallucination"></div>
+  <div id="fx-danger"></div>
 
   <!-- Interfaz principal -->
   <div id="ui" class="hidden">
     <!-- Barra superior -->
     <div id="top-bar">
-      <div class="stat-group">
-        <span id="day-label">Día 1</span>
-        <span id="time-label">06:00</span>
-        <span id="phase-label">Amanecer</span>
+      <div class="top-identity">
+        <span class="top-logo" aria-hidden="true">⛵</span>
+        <div>
+          <div class="stat-group top-time">
+            <span id="day-label">Día 1</span>
+            <span id="time-label">06:00</span>
+          </div>
+          <span id="phase-label">Amanecer</span>
+        </div>
       </div>
-      <div class="stat-group">
-        <span id="food-label" title="Comida">🍖 0</span>
-        <span id="water-label" title="Agua">💧 0</span>
-        <span id="weight-label" title="Peso">⚖ 0/0</span>
+      <div class="stat-group quick-stats">
+        <span id="food-label" class="quick-stat" title="Comida">🍖 0</span>
+        <span id="water-label" class="quick-stat" title="Agua">💧 0</span>
+        <span id="weight-label" class="quick-stat" title="Peso">⚖ 0/0</span>
       </div>
-      <div class="stat-group">
+      <div class="stat-group top-actions">
         <button id="btn-sound" title="Silenciar (M)">🔊</button>
         <button id="btn-pause" title="Pausa (Espacio)">⏸</button>
       </div>
@@ -92,16 +108,21 @@
 
     <!-- Barra de estado del jugador -->
     <div id="player-hud">
-      <div class="bar"><span>Salud</span><div class="track"><div id="bar-health" class="fill health"></div></div></div>
-      <div class="bar"><span>Hambre</span><div class="track"><div id="bar-hunger" class="fill hunger"></div></div></div>
-      <div class="bar"><span>Sed</span><div class="track"><div id="bar-thirst" class="fill thirst"></div></div></div>
-      <div class="bar"><span>Moral</span><div class="track"><div id="bar-morale" class="fill morale"></div></div></div>
-      <div class="bar"><span>Energía</span><div class="track"><div id="bar-stamina" class="fill stamina"></div></div></div>
-      <div class="bar"><span>Cordura</span><div class="track"><div id="bar-sanity" class="fill sanity"></div></div></div>
+      <div class="hud-heading">
+        <span>Superviviente</span>
+        <span id="crew-count">Solo</span>
+      </div>
+      <div class="bar"><div class="bar-meta"><span>Salud</span><strong id="value-health">100</strong></div><div class="track"><div id="bar-health" class="fill health"></div></div></div>
+      <div class="bar"><div class="bar-meta"><span>Hambre</span><strong id="value-hunger">90</strong></div><div class="track"><div id="bar-hunger" class="fill hunger"></div></div></div>
+      <div class="bar"><div class="bar-meta"><span>Sed</span><strong id="value-thirst">90</strong></div><div class="track"><div id="bar-thirst" class="fill thirst"></div></div></div>
+      <div class="bar"><div class="bar-meta"><span>Moral</span><strong id="value-morale">75</strong></div><div class="track"><div id="bar-morale" class="fill morale"></div></div></div>
+      <div class="bar"><div class="bar-meta"><span>Energía</span><strong id="value-stamina">100</strong></div><div class="track"><div id="bar-stamina" class="fill stamina"></div></div></div>
+      <div class="bar"><div class="bar-meta"><span>Cordura</span><strong id="value-sanity">100</strong></div><div class="track"><div id="bar-sanity" class="fill sanity"></div></div></div>
     </div>
 
     <!-- Panel de recursos -->
     <div id="resource-panel">
+      <div class="panel-heading"><span>Inventario</span><small>Materiales</small></div>
       <div class="resource" title="Madera"><span class="icon">🪵</span><span id="res-wood">0</span></div>
       <div class="resource" title="Plástico"><span class="icon">🧴</span><span id="res-plastic">0</span></div>
       <div class="resource" title="Tela"><span class="icon">🧵</span><span id="res-cloth">0</span></div>
@@ -112,22 +133,33 @@
 
     <!-- Objetivo -->
     <div id="objective-panel">
-      <strong>Objetivo:</strong> <span id="objective-text">Recoge restos y sobrevive.</span>
+      <span class="panel-kicker">Objetivo actual</span>
+      <span id="objective-text">Recoge restos y sobrevive.</span>
+    </div>
+
+    <!-- Amenaza más urgente -->
+    <div id="threat-panel" class="hidden" role="status" aria-live="polite">
+      <span id="threat-icon" aria-hidden="true">⚠</span>
+      <div>
+        <strong id="threat-title">Amenaza cercana</strong>
+        <span id="threat-detail">Mantente alerta</span>
+      </div>
     </div>
 
     <!-- Consumo y estado -->
     <div id="status-panel">
-      <div>Consumo/día: <span id="daily-food">1</span> 🍖 / <span id="daily-water">1.3</span> 💧</div>
-      <div>Estructura: <span id="structural-health">100%</span></div>
-      <div>Remo: <span id="rowing-status">listo</span></div>
-      <div>Navegación: <span id="navigation-status">a la deriva</span></div>
+      <div class="panel-heading"><span>Estado de la balsa</span><small>En directo</small></div>
+      <div class="status-row"><span>Consumo diario</span><strong><span id="daily-food">1</span> 🍖 · <span id="daily-water">1.3</span> 💧</strong></div>
+      <div class="status-row"><span>Estructura</span><strong id="structural-health">100%</strong></div>
+      <div class="status-row"><span>Remo</span><strong id="rowing-status">listo</strong></div>
+      <div class="status-row status-navigation"><span>Navegación</span><strong id="navigation-status">a la deriva</strong></div>
     </div>
 
     <!-- Botones de acción -->
     <div id="action-bar">
-      <button id="btn-build">Construir (B)</button>
-      <button id="btn-crew">Tripulación</button>
-      <button id="btn-log">Registro</button>
+      <button id="btn-build"><span aria-hidden="true">🔨</span><span>Construir</span><kbd>B</kbd></button>
+      <button id="btn-crew"><span aria-hidden="true">👥</span><span>Tripulación</span></button>
+      <button id="btn-log"><span aria-hidden="true">📖</span><span>Registro</span></button>
     </div>
 
     <!-- Controles táctiles; Input traduce estos botones a las teclas existentes -->

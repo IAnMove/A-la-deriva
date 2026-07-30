@@ -84,7 +84,17 @@ load('game-ui.js');
 load('game-renderer.js');
 run(`
   var World = { scene: {}, mouseToWorld: () => ({ x: 0, z: 0 }) };
-  var EntityManager = { objects: [], dangers: [], fishBanks: [], scene: {}, reset() {}, update() {} };
+  var EntityManager = {
+    objects: [],
+    dangers: [],
+    reefs: [],
+    fishBanks: [],
+    scene: {},
+    reset() {},
+    update() {},
+    spawnDanger() {},
+    getThreatSummary: () => null
+  };
   var HookVis = { hide() {}, show() {} };
   var PlayerVis = { sync() {}, updateAim() {} };
   var AudioSys = { play() {}, isEnabled: () => true, setEnabled() {} };
@@ -528,6 +538,111 @@ test('los impactos localizados dañan el módulo alcanzado', () => {
   `);
   assert.equal(run('farFloorHealthFixture'), 50);
   assert.equal(run('impactedRadioHealthFixture'), 23);
+});
+
+test('tiburones telegrafiados devoran a una casilla, se esquivan y temen al gancho', () => {
+  resetRaft([
+    ['0,0', 'floor', 50],
+    ['1,0', 'floor', 50],
+    ['2,0', 'floor', 50]
+  ]);
+  run(`
+    Game.state = 'playing';
+    Game.day = 1;
+    Game.resetPlayerState({ x: 5, z: 1, health: 100, morale: 75 });
+    var sharkCrewFixture = new Survivor();
+    sharkCrewFixture.name = 'Mara';
+    sharkCrewFixture.gx = 0;
+    sharkCrewFixture.gy = 0;
+    CrewManager.members = [sharkCrewFixture];
+    var crewSharkFixture = {
+      active: true, resolved: false, state: 'charge',
+      x: 1, z: 1, radius: 0.9,
+      beginFlee() { this.resolved = true; this.state = 'flee'; }
+    };
+    var crewSharkResolvedFixture = Game.resolveSharkAttack(crewSharkFixture);
+  `);
+  assert.equal(run('crewSharkResolvedFixture'), true);
+  assert.equal(run('sharkCrewFixture.alive'), false);
+  assert.equal(run('Game.player.health'), 100);
+  assert.equal(run('Game.player.morale'), 57);
+
+  resetRaft([
+    ['0,0', 'floor', 50],
+    ['1,0', 'floor', 50],
+    ['2,0', 'floor', 50]
+  ]);
+  run(`
+    Game.state = 'playing';
+    CrewManager.members = [];
+    Game.resetPlayerState({ x: 5, z: 1, health: 100 });
+    var dodgeSharkFixture = {
+      active: true, resolved: false, state: 'charge',
+      x: 1, z: 1, radius: 0.9,
+      beginFlee() { this.resolved = true; this.state = 'flee'; }
+    };
+    var dodgeResolvedFixture = Game.resolveSharkAttack(dodgeSharkFixture);
+    var dodgeHealthFixture = Game.player.health;
+    var dodgeRaftHealthFixture = Game.raft.get(0, 0).health;
+  `);
+  assert.equal(run('dodgeResolvedFixture'), true);
+  assert.equal(run('dodgeHealthFixture'), 100);
+  assert.ok(run('dodgeRaftHealthFixture') < 50);
+  assert.equal(run('Game.state'), 'playing');
+
+  resetRaft([['0,0', 'floor', 50]]);
+  run(`
+    Game.state = 'playing';
+    Game.stats.deathCause = '';
+    Game.resetPlayerState({ x: 1, z: 1, health: 100 });
+    var lethalSharkFixture = {
+      active: true, resolved: false, state: 'charge',
+      x: 1, z: 1, radius: 0.9,
+      beginFlee() { this.resolved = true; this.state = 'flee'; }
+    };
+    Game.resolveSharkAttack(lethalSharkFixture);
+    var lethalSharkCauseFixture = Game.stats.deathCause;
+  `);
+  assert.equal(run('Game.player.health'), 0);
+  assert.equal(run('Game.state'), 'end');
+  assert.match(run('lethalSharkCauseFixture'), /tiburón/i);
+
+  run(`
+    Game.state = 'playing';
+    Game.resetPlayerState({ x: 1, z: 1 });
+    var repelledFixture = false;
+    EntityManager.objects = [];
+    EntityManager.fishBanks = [];
+    EntityManager.dangers = [{
+      active: true, state: 'telegraph', x: 1.1, z: 1, radius: 0.9,
+      scareFrom() { repelledFixture = true; this.state = 'flee'; return true; }
+    }];
+    Game.player.hook = {
+      x: 1.1, z: 1, vx: 0, vz: 0, life: 0, distance: 0,
+      maxRange: 8, returning: false, object: null
+    };
+    Game.updateHook(0.016);
+  `);
+  assert.equal(run('repelledFixture'), true);
+  assert.equal(run('Game.player.hook.returning'), true);
+});
+
+test('los arrecifes dañan de forma localizada y pueden romper la balsa', () => {
+  resetRaft([['0,0', 'floor', 50]]);
+  run(`
+    Game.state = 'playing';
+    Game.day = 1;
+    Game.resetPlayerState({ x: 1, z: 1, health: 100 });
+    CrewManager.members = [];
+    var reefFixture = {
+      active: true, hit: false, x: 1, z: 1, radius: 1.2
+    };
+    var reefResolvedFixture = Game.resolveReefCollision(reefFixture);
+  `);
+  assert.equal(run('reefResolvedFixture'), true);
+  assert.equal(run('reefFixture.hit'), true);
+  assert.equal(run('Game.raft.totalArea()'), 0);
+  assert.equal(run('Game.state'), 'end');
 });
 
 test('habilidades, carga, almacenamiento e interfaz', () => {

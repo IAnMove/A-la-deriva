@@ -10,12 +10,15 @@ let nextTimerId = 1;
 const eventMessage = {
   textContent: '',
   visible: false,
+  classes: new Set(),
   classList: {
-    add(name) {
-      if (name === 'show') eventMessage.visible = true;
+    add(...names) {
+      names.forEach(name => eventMessage.classes.add(name));
+      if (names.includes('show')) eventMessage.visible = true;
     },
-    remove(name) {
-      if (name === 'show') eventMessage.visible = false;
+    remove(...names) {
+      names.forEach(name => eventMessage.classes.delete(name));
+      if (names.includes('show')) eventMessage.visible = false;
     }
   }
 };
@@ -53,12 +56,28 @@ const secondTimerId = nextTimerId - 1;
 assert.equal(pendingTimers.has(firstTimerId), false);
 assert.equal(eventMessage.textContent, 'Aviso más reciente');
 assert.equal(eventMessage.visible, true);
+assert.equal(eventMessage.classes.has('warning'), true);
 
 pendingTimers.get(secondTimerId)();
 assert.equal(eventMessage.visible, false);
 
-const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
-assert.match(html, /<span>Energía<\/span>[\s\S]*?id="bar-stamina"/);
-assert.doesNotMatch(html, /<span>Cansancio<\/span>[\s\S]*?id="bar-stamina"/);
+vm.runInContext(
+  'GameUI.showEventMessage({}, "¡Tiburón al ataque, peligro mortal!")',
+  sandbox
+);
+assert.equal(eventMessage.classes.has('danger'), true);
+assert.equal(eventMessage.classes.has('warning'), false);
 
-console.log('✓ mensajes recientes conservan su temporizador y la barra indica Energía');
+const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+const css = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+assert.match(
+  html,
+  /<span>Energía<\/span>[\s\S]*?id="value-stamina"[\s\S]*?id="bar-stamina"/
+);
+assert.doesNotMatch(html, /<span>Cansancio<\/span>[\s\S]*?id="bar-stamina"/);
+assert.match(html, /id="threat-panel"[\s\S]*?id="threat-detail"/);
+assert.match(html, /class="panel hero-panel"/);
+assert.match(css, /#threat-panel\.critical/);
+assert.match(css, /backdrop-filter:\s*blur\(14px\)/);
+
+console.log('✓ feedback por severidad, HUD profesional y avisos de amenazas');

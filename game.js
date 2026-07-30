@@ -7,7 +7,10 @@ const DAY_REAL_SECONDS = 240; // 4 minutos
 const HOURS_PER_DAY = 24;
 const SECONDS_PER_HOUR = DAY_REAL_SECONDS / HOURS_PER_DAY;
 
-const ZONES = ['calm', 'debris', 'fish', 'calm', 'storm', 'sharks', 'polluted', 'calm', 'ship'];
+const ZONES = [
+  'calm', 'debris', 'fish', 'calm', 'storm', 'sharks',
+  'polluted', 'reef', 'calm', 'ship'
+];
 
 const Game = {
   state: 'start', // start, playing, paused, end
@@ -1015,6 +1018,7 @@ const Game = {
       fish: 'Banco de peces',
       polluted: 'Aguas contaminadas',
       sharks: 'Zona de tiburones',
+      reef: 'Arrecife de coral',
       ship: 'Ruta de barcos',
       island: 'Cercanía de una isla'
     }[z] || z;
@@ -1077,7 +1081,7 @@ const Game = {
     }
 
     // Colisión con bancos de peces
-    if (!h.object) {
+    if (!h.object && !h.returning) {
       for (const bank of EntityManager.fishBanks) {
         if (Util.dist2(h.x, h.z, bank.x, bank.z) < bank.radius) {
           if (Game.startFishing(bank, h)) {
@@ -1085,6 +1089,25 @@ const Game = {
             return;
           }
         }
+      }
+    }
+
+    // Golpear a un tiburón con el gancho interrumpe su ataque. Esto ofrece
+    // una defensa activa cuando la balsa aún es demasiado pequeña para huir.
+    if (!h.object && !h.returning) {
+      for (const danger of EntityManager.dangers) {
+        if (!danger.active || danger.state === 'flee') continue;
+        if (Util.dist2(h.x, h.z, danger.x, danger.z) >=
+            danger.radius + 0.45) continue;
+        if (typeof danger.scareFrom === 'function' &&
+            danger.scareFrom(p.x, p.z)) {
+          h.returning = true;
+          Game.showEventMessage('¡Has ahuyentado al tiburón con el gancho!');
+          Log.add('Un golpe de gancho hizo huir al tiburón.');
+          AudioSys.play('shark-repel');
+          Particles.emit(danger.x, 0.45, danger.z, '#e3f2fd', 14, 4);
+        }
+        break;
       }
     }
 
@@ -1112,7 +1135,27 @@ const Game = {
     Game.worldOffsetZ += currentSpeedZ * dt;
 
     const center = Game.raft.getCenter();
-    EntityManager.update(dt, center, Game.zone, Game.day, currentSpeed, currentSpeedZ, Game.elapsed);
+    const hazardTargets = Game.getHazardTargets();
+    EntityManager.update(
+      dt,
+      center,
+      Game.zone,
+      Game.day,
+      currentSpeed,
+      currentSpeedZ,
+      Game.elapsed,
+      hazardTargets
+    );
+
+    for (const danger of EntityManager.dangers) {
+      if (!danger.justLocked) continue;
+      danger.justLocked = false;
+      Game.showEventMessage(
+        `¡Tiburón acechando a ${danger.targetName || 'la tripulación'}! ` +
+        'Aléjate más de una casilla o usa el gancho.'
+      );
+      AudioSys.play('shark-warning');
+    }
 
     // Recogida automática SOLO cuando el objeto toca la balsa;
     // cualquier objeto más lejano requiere el gancho.
@@ -1125,18 +1168,133 @@ const Game = {
       }
     }
 
-    // Colisiones de peligros con la balsa
+    // Los tiburones solo golpean durante una carga telegrafiada. Si entran a
+    // una casilla de distancia de un personaje, lo devoran; si falla, dañan
+    // el módulo alcanzado y el jugador ha esquivado el ataque.
     for (const d of EntityManager.dangers) {
-      if (d.active && Game.raft.intersectsCircle(d.x, d.z, d.radius + 0.2)) {
-        const dmg = Game.raft.takeDamage(12, d.x, d.z);
-        Game.reportDetachedModules();
-        Game.showEventMessage(`¡Tiburón golpea la balsa! -${Math.floor(dmg)} estructura`);
-        AudioSys.play('damage');
-        Particles.emit(d.x, 0.5, d.z, '#ff7043', 10, 3);
-        Game.highlightsDirty = true;
-        d.active = false;
-      }
+      Game.resolveSharkAttack(d);
+      if (Game.state !== 'playing') return;
     }
+
+    for (const reef of EntityManager.reefs || []) {
+      Game.resolveReefCollision(reef);
+      if (Game.state !== 'playing') return;
+    }
+  },
+
+  getHazardTargets: () => {
+    const targets = [{
+      id: 'player',
+      type: 'player',
+      name: 'ti',
+      x: Game.player.x,
+      z: Game.player.z,
+      source: Game.player
+    }];
+    const cellSize = Game.raft.cellSize;
+    for (let index = 0; index < CrewManager.members.length; index++) {
+      const member = CrewManager.members[index];
+      if (!member.alive || !Number.isFinite(member.gx) ||
+          !Number.isFinite(member.gy)) continue;
+      targets.push({
+        id: `crew-${index}`,
+        type: 'crew',
+        name: member.name,
+        x: (member.gx + 0.5) * cellSize,
+        z: (member.gy + 0.5) * cellSize,
+        source: member
+      });
+    }
+    return targets;
+  },
+
+  resolveSharkAttack: (danger) => {
+    if (!danger?.active || danger.resolved || danger.state !== 'charge' ||
+        !Game.raft.intersectsCircle(
+          danger.x,
+          danger.z,
+          danger.radius + 0.15
+        )) return false;
+
+    const sharkCell = Game.raft.worldToGrid(danger.x, danger.z);
+    const victim = Game.getHazardTargets()
+      .map(target => {
+        const cell = Game.raft.worldToGrid(target.x, target.z);
+        return {
+          target,
+          cellDistance: Math.max(
+            Math.abs(cell.gx - sharkCell.gx),
+            Math.abs(cell.gy - sharkCell.gy)
+          ),
+          distance: Util.dist2(danger.x, danger.z, target.x, target.z)
+        };
+      })
+      .filter(entry => entry.cellDistance <= 1)
+      .sort((a, b) => a.distance - b.distance)[0]?.target;
+
+    if (victim?.type === 'player') {
+      Game.player.health = 0;
+      Game.stats.deathCause =
+        'Un tiburón alcanzó y devoró al personaje principal';
+      Game.showEventMessage('¡El tiburón te ha alcanzado!');
+      Log.add('El tiburón alcanzó al personaje principal.');
+      AudioSys.play('shark-bite');
+    } else if (victim?.type === 'crew') {
+      victim.source.health = 0;
+      victim.source.alive = false;
+      victim.source.deathLogged = true;
+      CrewManager.removeMesh(victim.source);
+      Game.player.morale = Math.max(0, Game.player.morale - 18);
+      Game.showEventMessage(`¡El tiburón se ha llevado a ${victim.name}!`);
+      Log.add(`${victim.name} fue devorado por un tiburón.`);
+      AudioSys.play('shark-bite');
+    } else {
+      const damage = 20 + Math.min(18, Game.day * 0.8);
+      const dealt = Game.raft.takeDamage(damage, danger.x, danger.z);
+      Game.reportDetachedModules();
+      Game.showEventMessage(
+        `Esquivaste al tiburón, pero golpeó la balsa (-${Math.floor(dealt)})`
+      );
+      Log.add(`El tiburón falló su presa y causó ${Math.floor(dealt)} de daño.`);
+      AudioSys.play('damage');
+      Game.highlightsDirty = true;
+    }
+
+    Particles.emit(danger.x, 0.5, danger.z, '#ff7043', 16, 4);
+    if (typeof danger.beginFlee === 'function') {
+      const center = Game.raft.getCenter();
+      danger.beginFlee(center.x, center.z);
+    } else {
+      danger.resolved = true;
+      danger.active = false;
+    }
+    Game.checkWinLose();
+    return true;
+  },
+
+  resolveReefCollision: (reef) => {
+    if (!reef?.active || reef.hit ||
+        !Game.raft.intersectsCircle(
+          reef.x,
+          reef.z,
+          reef.radius + 0.1
+        )) return false;
+    reef.hit = true;
+    reef.active = false;
+    const damage = 55 + Math.min(25, Game.day * 1.5);
+    const dealt = Game.raft.takeDamage(damage, reef.x, reef.z);
+    Game.reportDetachedModules();
+    Game.highlightsDirty = true;
+    Game.showEventMessage(
+      `¡La balsa ha encallado en el coral! -${Math.floor(dealt)} estructura`
+    );
+    Log.add(
+      `El arrecife abrió la balsa y causó ${Math.floor(dealt)} de daño.`
+    );
+    AudioSys.play('reef-hit');
+    Particles.emit(reef.x, 0.35, reef.z, '#ffca28', 20, 5);
+    Game.checkWinLose();
+    return true;
   },
 
   updateProduction: (dt) => {
@@ -1421,12 +1579,14 @@ const Game = {
         break;
       }
       case 'shark': {
-        Game.showEventMessage('Un tiburón ataca la balsa.');
-        AudioSys.play('damage');
-        const dmg2 = Game.raft.takeDamage(8);
-        Game.reportDetachedModules();
-        Game.highlightsDirty = true;
-        Log.add(`Tiburón causó ${Math.floor(dmg2)} de daño.`);
+        Game.showEventMessage(
+          'Una aleta rodea la balsa. Prepárate para esquivar o usar el gancho.'
+        );
+        AudioSys.play('shark-warning');
+        if (typeof EntityManager.spawnDanger === 'function') {
+          EntityManager.spawnDanger(Game.raft.getCenter(), 'sharks');
+        }
+        Log.add('Un tiburón comienza a acechar a la tripulación.');
         break;
       }
       case 'sick':
@@ -1518,7 +1678,9 @@ const Game = {
 
   checkWinLose: () => {
     if (Game.player.health <= 0) {
-      Game.stats.deathCause = 'El personaje principal ha muerto';
+      if (!Game.stats.deathCause) {
+        Game.stats.deathCause = 'El personaje principal ha muerto';
+      }
       Game.triggerLose();
       return;
     }

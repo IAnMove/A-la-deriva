@@ -61,6 +61,14 @@ const GameUI = Object.freeze({
   showEventMessage(game, text) {
     const element = document.getElementById('event-message');
     element.textContent = text;
+    const normalized = String(text).toLowerCase();
+    const severity = /tibur|coral|encall|devor|muert|ataque|golpe|tormenta|ola/.test(normalized)
+      ? 'danger'
+      : /aviso|calor|daño|hambre|sed|cansad/.test(normalized)
+        ? 'warning'
+        : 'info';
+    element.classList.remove('danger', 'warning', 'info');
+    element.classList.add(severity);
     element.classList.add('show');
     if (eventMessageTimeout !== null) {
       clearTimeout(eventMessageTimeout);
@@ -133,6 +141,12 @@ const GameUI = Object.freeze({
     GameUI.setBar('bar-morale', game.player.morale);
     GameUI.setBar('bar-stamina', game.player.stamina);
     GameUI.setBar('bar-sanity', game.player.sanity);
+    const crewCount = CrewManager.count();
+    const crewCountElement = document.getElementById('crew-count');
+    if (crewCountElement) {
+      crewCountElement.textContent =
+        crewCount > 0 ? `${crewCount} a bordo` : 'Solo';
+    }
 
     document.getElementById('food-label').textContent =
       `🍖 ${Util.formatAmount(game.resources.food)}`;
@@ -194,6 +208,14 @@ const GameUI = Object.freeze({
       : structuralPercent < 70
         ? 'var(--warning)'
         : 'var(--success)';
+    const statusPanel = document.getElementById('status-panel');
+    if (statusPanel) {
+      statusPanel.classList.toggle('critical', structuralPercent < 40);
+      statusPanel.classList.toggle(
+        'warning',
+        structuralPercent >= 40 && structuralPercent < 70
+      );
+    }
 
     const rowingStatus = document.getElementById('rowing-status');
     if (game.rowingCooldown > 0) {
@@ -209,6 +231,38 @@ const GameUI = Object.freeze({
     const sanity = game.player.sanity;
     document.getElementById('fx-hallucination').style.opacity =
       sanity < 50 ? (50 - sanity) / 50 * 0.9 : 0;
+    GameUI.updateThreat(game);
+  },
+
+  updateThreat(game) {
+    const panel = document.getElementById('threat-panel');
+    if (!panel) return;
+    const center = game.raft.getCenter();
+    const threat =
+      typeof EntityManager !== 'undefined' &&
+      typeof EntityManager.getThreatSummary === 'function'
+        ? EntityManager.getThreatSummary(center)
+        : null;
+    const vignette = document.getElementById('fx-danger');
+    if (!threat) {
+      panel.classList.add('hidden');
+      panel.classList.remove('critical', 'warning', 'caution');
+      if (vignette) vignette.style.opacity = 0;
+      return;
+    }
+
+    panel.classList.remove('hidden', 'critical', 'warning', 'caution');
+    panel.classList.add(threat.level || 'warning');
+    const icon = document.getElementById('threat-icon');
+    const title = document.getElementById('threat-title');
+    const detail = document.getElementById('threat-detail');
+    if (icon) icon.textContent = threat.icon || '⚠';
+    if (title) title.textContent = threat.title || 'Amenaza cercana';
+    if (detail) detail.textContent = threat.detail || '';
+    if (vignette) {
+      vignette.style.opacity =
+        threat.level === 'critical' ? 0.52 : threat.level === 'warning' ? 0.2 : 0;
+    }
   },
 
   setBar(id, value) {
@@ -216,5 +270,9 @@ const GameUI = Object.freeze({
     const safeValue = Util.clamp(Number(value) || 0, 0, 100);
     element.style.width = `${safeValue}%`;
     element.classList.toggle('low', safeValue < 25);
+    const valueElement = document.getElementById(
+      `value-${id.replace(/^bar-/, '')}`
+    );
+    if (valueElement) valueElement.textContent = Math.round(safeValue);
   }
 });

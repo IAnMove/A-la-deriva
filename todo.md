@@ -216,3 +216,19 @@ renderizado tienen módulos propios con adaptadores compatibles.
 - Salida al menú con guardado síncrono y clics pendientes limpiados al perder foco.
 - Reglas de estado, movimiento, remo, rutas y objetivos extraídas a `GameSimulation`.
 - Nuevas regresiones unitarias y casos E2E preparados para navegador.
+
+## Revisión jugable — v1.7
+
+- Interfaz visual renovada con paneles translúcidos, jerarquía tipográfica,
+  barras numéricas, navegación compacta y adaptación específica para móvil.
+- Mensajes de evento diferenciados por severidad y alerta central de amenazas.
+- Tiburones con acecho, objetivo visible y carga telegrafiada: el personaje
+  marcado puede alejarse más de una casilla o ahuyentarlos con el gancho.
+- Un tiburón que alcanza una casilla adyacente devora al personaje; si falla,
+  golpea de forma localizada la estructura de la balsa.
+- Arrecifes de coral visibles y señalizados que pueden esquivarse mediante
+  navegación lateral; una colisión daña gravemente o rompe el módulo alcanzado.
+- Eventos diarios de tiburón convertidos en encuentros jugables, sin daño
+  inevitable decidido al azar.
+- Pruebas de regresión para telegráficos, esquiva, ataque, defensa con gancho,
+  colisiones de coral y componentes de la nueva interfaz.
