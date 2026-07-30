@@ -232,28 +232,53 @@ function makeHumanoidMesh(shirtColor = 0xd84315, opts = {}) {
   const pants = opts.pants ?? 0x37474f;
   const g = new THREE.Group();
 
-  // Piernas con pivote en la cadera
+  // Las botas alargan la silueta hacia delante y hacen más legible el paso.
   const legL = new THREE.Group();
   legL.position.set(-0.11, 0.36, 0);
-  legL.add(box(0.15, 0.36, 0.17, pants, 0, -0.18, 0));
+  legL.add(box(0.16, 0.34, 0.18, pants, 0, -0.16, 0));
+  const footL = box(0.18, 0.11, 0.29, 0x263238, 0, -0.35, 0.055);
+  legL.add(footL);
   const legR = new THREE.Group();
   legR.position.set(0.11, 0.36, 0);
-  legR.add(box(0.15, 0.36, 0.17, pants, 0, -0.18, 0));
+  legR.add(box(0.16, 0.34, 0.18, pants, 0, -0.16, 0));
+  const footR = box(0.18, 0.11, 0.29, 0x263238, 0, -0.35, 0.055);
+  legR.add(footR);
 
-  // Torso
   const body = box(0.44, 0.52, 0.26, shirtColor, 0, 0.62, 0);
-  // Cinturón
+  const neck = cyl(0.075, 0.085, 0.1, skin, 0, 0.94, 0, 7);
   const belt = box(0.46, 0.08, 0.28, 0x263238, 0, 0.4, 0);
+  const buckle = box(0.09, 0.07, 0.025, 0xffca28, 0, 0.4, 0.155);
 
-  // Brazos con pivote en el hombro
-  const armL = new THREE.Group();
-  armL.position.set(-0.29, 0.82, 0);
-  armL.add(box(0.12, 0.4, 0.14, shirtColor, 0, -0.17, 0));
-  armL.add(box(0.1, 0.1, 0.11, skin, 0, -0.4, 0));
-  const armR = new THREE.Group();
-  armR.position.set(0.29, 0.82, 0);
-  armR.add(box(0.12, 0.4, 0.14, shirtColor, 0, -0.17, 0));
-  armR.add(box(0.1, 0.1, 0.11, skin, 0, -0.4, 0));
+  // Hombro y codo son pivotes distintos. Los NPC siguen pudiendo animar solo
+  // el hombro, mientras el jugador puede sujetar herramientas con precisión.
+  const makeArm = side => {
+    const arm = new THREE.Group();
+    arm.position.set(side * 0.29, 0.82, 0);
+    arm.add(box(0.13, 0.24, 0.15, shirtColor, 0, -0.1, 0));
+    const forearm = new THREE.Group();
+    forearm.position.set(0, -0.21, 0);
+    forearm.add(box(0.115, 0.22, 0.13, skin, 0, -0.09, 0));
+    const hand = new THREE.Group();
+    hand.position.set(0, -0.23, 0);
+    const palm = new THREE.Mesh(
+      new THREE.SphereGeometry(0.075, 7, 5),
+      mat(skin)
+    );
+    palm.scale.set(0.9, 1.05, 0.9);
+    palm.castShadow = true;
+    hand.add(palm);
+    forearm.add(hand);
+    arm.add(forearm);
+    return { arm, forearm, hand };
+  };
+  const leftArm = makeArm(-1);
+  const rightArm = makeArm(1);
+  const armL = leftArm.arm;
+  const armR = rightArm.arm;
+  const forearmL = leftArm.forearm;
+  const forearmR = rightArm.forearm;
+  const handL = leftArm.hand;
+  const handR = rightArm.hand;
 
   // Cabeza con pelo y ojos
   const head = new THREE.Group();
@@ -268,10 +293,21 @@ function makeHumanoidMesh(shirtColor = 0xd84315, opts = {}) {
   head.add(hair);
   const eyeL = box(0.035, 0.05, 0.02, 0x212121, -0.07, 0.0, 0.18);
   const eyeR = box(0.035, 0.05, 0.02, 0x212121, 0.07, 0.0, 0.18);
-  head.add(eyeL, eyeR);
+  const nose = new THREE.Mesh(
+    new THREE.ConeGeometry(0.035, 0.09, 5),
+    mat(skin)
+  );
+  nose.rotation.x = Math.PI / 2;
+  nose.position.set(0, -0.035, 0.205);
+  nose.castShadow = true;
+  head.add(eyeL, eyeR, nose);
 
-  g.add(legL, legR, body, belt, armL, armR, head);
-  g.userData.parts = { legL, legR, armL, armR, head, body };
+  g.add(legL, legR, body, neck, belt, buckle, armL, armR, head);
+  g.userData.parts = {
+    legL, legR, footL, footR,
+    armL, armR, forearmL, forearmR, handL, handR,
+    head, body
+  };
   return g;
 }
 

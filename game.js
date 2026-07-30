@@ -1113,6 +1113,9 @@ const Game = {
       const halfWidth = fishing.targetWidth * 0.5;
       const distance = Math.abs(fishing.marker - fishing.targetCenter);
       const hit = distance <= halfWidth;
+      if (typeof PlayerVis !== 'undefined' && PlayerVis.pulseTug) {
+        PlayerVis.pulseTug(hit);
+      }
 
       if (hit) {
         const precision = 1 - distance / Math.max(0.001, halfWidth);
@@ -1513,7 +1516,7 @@ const Game = {
         p.hook = null;
         HookVis.hide();
       } else {
-        HookVis.show(p.x, p.z, h.x, h.z);
+        HookVis.show(p.x, p.z, h.x, h.z, h);
       }
       return;
     }
@@ -1537,7 +1540,7 @@ const Game = {
       for (const bank of EntityManager.fishBanks) {
         if (Util.dist2(h.x, h.z, bank.x, bank.z) < bank.radius) {
           if (Game.startFishing(bank, h)) {
-            HookVis.show(p.x, p.z, h.x, h.z);
+            HookVis.show(p.x, p.z, h.x, h.z, h);
             return;
           }
         }
@@ -1565,7 +1568,7 @@ const Game = {
 
     if (h.distance >= h.maxRange) h.returning = true;
 
-    HookVis.show(p.x, p.z, h.x, h.z);
+    HookVis.show(p.x, p.z, h.x, h.z, h);
   },
 
   updateEntities: (dt) => {

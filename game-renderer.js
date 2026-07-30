@@ -173,7 +173,8 @@ const GameRenderer = {
         game.player.x,
         game.player.z,
         game.player.hook.x,
-        game.player.hook.z
+        game.player.hook.z,
+        game.player.hook
       );
     }
     CrewManager.syncMeshes(game.raft);

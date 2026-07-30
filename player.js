@@ -1,6 +1,8 @@
 /*****************************************************
- * player.js - Figura 3D del náufrago (la lógica de
- * movimiento vive en game.js, como en la versión 2D)
+ * player.js - Modelo y animación del jugador.
+ *
+ * La simulación sigue viviendo fuera de este archivo. Aquí solo se traducen
+ * velocidad, remo y estado del anzuelo a poses legibles.
  *****************************************************/
 
 const PlayerVis = {
@@ -8,45 +10,166 @@ const PlayerVis = {
   aimLine: null,
   rod: null,
   rodTip: null,
+  reel: null,
+  reelCrank: null,
+  rodSegments: [],
   walkTime: 0,
   castTime: 99,
-  castDuration: 0.62,
+  castDuration: 0.9,
   castTarget: null,
   lastHook: null,
+  tugTime: 0,
+  tugSuccess: true,
+  pose: 'idle',
 
-  init: (raftGroup) => {
-    PlayerVis.mesh = makeHumanoidMesh(0x1565c0, { hair: 0x3e2723, pants: 0x4e342e });
-    PlayerVis.mesh.position.set(1, 0.35, 1);
-    raftGroup.add(PlayerVis.mesh);
+  ease: t => {
+    const safe = Math.max(0, Math.min(1, t));
+    return safe * safe * (3 - 2 * safe);
+  },
 
-    // Caña low-poly unida a la mano derecha. El brazo actúa como pivote para
-    // que la preparación y el latigazo del lanzamiento sean legibles.
-    const armR = PlayerVis.mesh.userData.parts.armR;
-    PlayerVis.rod = new THREE.Group();
-    PlayerVis.rod.position.set(0, -0.34, 0);
-    const handle = cyl(0.045, 0.05, 0.28, 0x5d4037, 0, -0.12, 0, 7);
-    const shaft = cyl(0.022, 0.04, 0.95, 0x37474f, 0, -0.72, 0, 7);
-    const guide = new THREE.Mesh(
-      new THREE.TorusGeometry(0.055, 0.012, 5, 10),
+  mix: (a, b, t) => a + (b - a) * PlayerVis.ease(t),
+
+  addPlayerDetails: parts => {
+    // Chaleco salvavidas: da identidad al protagonista y mantiene una silueta
+    // naranja reconocible incluso con lluvia, noche o niebla.
+    const vest = new THREE.Group();
+    vest.name = 'player-life-vest';
+    vest.add(
+      box(0.17, 0.39, 0.045, 0xff8f00, -0.115, 0.64, 0.155),
+      box(0.17, 0.39, 0.045, 0xff8f00, 0.115, 0.64, 0.155),
+      box(0.045, 0.37, 0.05, 0xffca28, 0, 0.63, 0.18),
+      box(0.43, 0.055, 0.05, 0xffca28, 0, 0.48, 0.18)
+    );
+    PlayerVis.mesh.add(vest);
+
+    // Gorra de marinero low-poly.
+    const crown = cyl(0.17, 0.19, 0.12, 0xe3f2fd, 0, 0.2, 0, 8);
+    const brim = box(0.28, 0.025, 0.2, 0x1565c0, 0, 0.145, 0.1);
+    parts.head.add(crown, brim);
+
+    // Pequeña bolsa de herramientas a la espalda.
+    const pouch = box(0.27, 0.28, 0.12, 0x6d4c41, -0.16, 0.58, -0.19);
+    pouch.rotation.z = 0.08;
+    PlayerVis.mesh.add(pouch);
+  },
+
+  makeRod: hand => {
+    const rod = new THREE.Group();
+    rod.name = 'fishing-rod';
+    rod.position.set(0, -0.015, 0.015);
+    rod.rotation.z = -0.08;
+
+    const handle = cyl(0.045, 0.052, 0.3, 0x5d4037, 0, -0.13, 0, 8);
+    const gripTop = cyl(0.052, 0.052, 0.05, 0x263238, 0, 0.025, 0, 8);
+    rod.add(handle, gripTop);
+
+    const reel = new THREE.Group();
+    reel.name = 'fishing-reel';
+    reel.position.set(-0.095, -0.24, 0.015);
+    const spool = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.085, 0.085, 0.1, 10),
       mat(0xb0bec5)
     );
-    guide.position.y = -1.16;
-    guide.rotation.x = Math.PI / 2;
-    PlayerVis.rodTip = new THREE.Object3D();
-    PlayerVis.rodTip.position.set(0, -1.22, 0);
-    PlayerVis.rod.add(handle, shaft, guide, PlayerVis.rodTip);
-    PlayerVis.rod.visible = false;
-    armR.add(PlayerVis.rod);
+    spool.rotation.z = Math.PI / 2;
+    spool.castShadow = true;
+    const reelCore = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.04, 0.04, 0.13, 8),
+      mat(0x455a64)
+    );
+    reelCore.rotation.z = Math.PI / 2;
+    reel.add(spool, reelCore);
+    rod.add(reel);
 
-    // Línea punteada de apuntado del gancho
-    const geo = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(), new THREE.Vector3()
-    ]);
-    PlayerVis.aimLine = new THREE.Line(geo, new THREE.LineDashedMaterial({
-      color: 0xffffff, transparent: true, opacity: 0.35, dashSize: 0.25, gapSize: 0.2
-    }));
+    const crank = new THREE.Group();
+    crank.position.set(-0.16, -0.24, 0.015);
+    crank.add(
+      box(0.035, 0.17, 0.035, 0x37474f, 0, -0.065, 0),
+      cyl(0.035, 0.035, 0.08, 0x5d4037, 0, -0.17, 0, 7)
+    );
+    rod.add(crank);
+
+    // Tres tramos anidados permiten flexionar la caña sin regenerar geometría.
+    const lengths = [0.38, 0.36, 0.34];
+    const radii = [
+      [0.025, 0.035],
+      [0.017, 0.026],
+      [0.009, 0.018]
+    ];
+    const segments = [];
+    let parent = rod;
+    let offset = -0.28;
+    lengths.forEach((length, index) => {
+      const pivot = new THREE.Group();
+      pivot.position.y = offset;
+      pivot.name = `rod-segment-${index + 1}`;
+      const shaft = cyl(
+        radii[index][0],
+        radii[index][1],
+        length,
+        index === 2 ? 0x263238 : 0x37474f,
+        0,
+        -length * 0.5,
+        0,
+        7
+      );
+      const guide = new THREE.Mesh(
+        new THREE.TorusGeometry(0.042 - index * 0.008, 0.009, 5, 9),
+        mat(0xcfd8dc)
+      );
+      guide.position.y = -length;
+      guide.rotation.x = Math.PI / 2;
+      guide.castShadow = true;
+      pivot.add(shaft, guide);
+      parent.add(pivot);
+      segments.push(pivot);
+      parent = pivot;
+      offset = -length;
+    });
+
+    const tip = new THREE.Object3D();
+    tip.name = 'rod-tip';
+    tip.position.y = -lengths[lengths.length - 1];
+    parent.add(tip);
+
+    hand.add(rod);
+    PlayerVis.rod = rod;
+    PlayerVis.rodTip = tip;
+    PlayerVis.reel = reel;
+    PlayerVis.reelCrank = crank;
+    PlayerVis.rodSegments = segments;
+    rod.visible = false;
+  },
+
+  init: raftGroup => {
+    PlayerVis.mesh = makeHumanoidMesh(0x1565c0, {
+      hair: 0x3e2723,
+      pants: 0x4e342e
+    });
+    PlayerVis.mesh.name = 'player';
+    PlayerVis.mesh.position.set(1, 0.35, 1);
+    PlayerVis.mesh.scale.setScalar(1.08);
+    raftGroup.add(PlayerVis.mesh);
+
+    const parts = PlayerVis.mesh.userData.parts;
+    PlayerVis.addPlayerDetails(parts);
+    PlayerVis.makeRod(parts.handR || parts.armR);
+
+    const positions = new Float32Array(6);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const material = new THREE.LineDashedMaterial({
+      color: 0xe3f2fd,
+      transparent: true,
+      opacity: 0.48,
+      dashSize: 0.24,
+      gapSize: 0.17,
+      depthWrite: false
+    });
+    PlayerVis.aimLine = new THREE.Line(geometry, material);
     PlayerVis.aimLine.frustumCulled = false;
+    PlayerVis.aimLine.visible = false;
     raftGroup.add(PlayerVis.aimLine);
+    PlayerVis.reset();
   },
 
   reset: () => {
@@ -54,13 +177,15 @@ const PlayerVis = {
     PlayerVis.castTime = 99;
     PlayerVis.castTarget = null;
     PlayerVis.lastHook = null;
+    PlayerVis.tugTime = 0;
+    PlayerVis.tugSuccess = true;
+    PlayerVis.pose = 'idle';
     if (PlayerVis.rod) PlayerVis.rod.visible = false;
     if (PlayerVis.mesh) PlayerVis.mesh.position.set(1, 0.35, 1);
+    if (PlayerVis.aimLine) PlayerVis.aimLine.visible = false;
   },
 
-  // Puede llamarse desde Game.castHook(target). sync() también detecta nuevos
-  // ganchos para mantener compatibilidad si no se llama explícitamente.
-  beginCast: (target) => {
+  beginCast: target => {
     PlayerVis.castTime = 0;
     PlayerVis.castTarget = target
       ? { x: target.x, z: target.z }
@@ -68,108 +193,229 @@ const PlayerVis = {
     if (PlayerVis.rod) PlayerVis.rod.visible = true;
   },
 
-  getRodTipWorld: (out) => {
+  pulseTug: success => {
+    PlayerVis.tugTime = 0.38;
+    PlayerVis.tugSuccess = success !== false;
+  },
+
+  getRodTipWorld: out => {
     if (!PlayerVis.rodTip || !PlayerVis.rod || !PlayerVis.rod.visible) return null;
     PlayerVis.mesh.updateMatrixWorld(true);
     return PlayerVis.rodTip.getWorldPosition(out || new THREE.Vector3());
   },
 
-  // Sincroniza la figura con el estado del jugador (con animación de extremidades)
+  resetJoints: parts => {
+    const joints = [
+      parts.armL, parts.armR, parts.forearmL, parts.forearmR,
+      parts.legL, parts.legR, parts.head
+    ];
+    joints.forEach(joint => {
+      if (joint) joint.rotation.set(0, 0, 0);
+    });
+    if (parts.body) {
+      parts.body.rotation.set(0, 0, 0);
+      parts.body.scale.set(1, 1, 1);
+    }
+    if (PlayerVis.rod) PlayerVis.rod.rotation.set(0, 0, -0.08);
+    PlayerVis.rodSegments.forEach(segment => segment.rotation.set(0, 0, 0));
+  },
+
+  setRodFlex: amount => {
+    const flex = Math.max(-1, Math.min(1, amount));
+    PlayerVis.rodSegments.forEach((segment, index) => {
+      segment.rotation.x = flex * (0.05 + index * 0.035);
+    });
+  },
+
+  poseCast: (parts, normalized) => {
+    if (normalized < 0.3) {
+      PlayerVis.pose = 'cast-anticipation';
+      const t = normalized / 0.3;
+      parts.armR.rotation.x = PlayerVis.mix(-0.2, 0.9, t);
+      parts.armR.rotation.z = PlayerVis.mix(0, -0.18, t);
+      parts.forearmR.rotation.x = PlayerVis.mix(-0.2, -0.82, t);
+      parts.armL.rotation.x = PlayerVis.mix(-0.1, -0.55, t);
+      parts.forearmL.rotation.x = PlayerVis.mix(0, -0.7, t);
+      PlayerVis.mesh.rotation.x = PlayerVis.mix(0, -0.08, t);
+      PlayerVis.mesh.rotation.z = PlayerVis.mix(0, -0.1, t);
+      PlayerVis.setRodFlex(-0.35 * t);
+      return;
+    }
+    if (normalized < 0.62) {
+      PlayerVis.pose = 'cast-release';
+      const t = (normalized - 0.3) / 0.32;
+      parts.armR.rotation.x = PlayerVis.mix(0.9, -1.62, t);
+      parts.armR.rotation.z = PlayerVis.mix(-0.18, 0.05, t);
+      parts.forearmR.rotation.x = PlayerVis.mix(-0.82, -0.15, t);
+      parts.armL.rotation.x = PlayerVis.mix(-0.55, -1.05, t);
+      parts.forearmL.rotation.x = PlayerVis.mix(-0.7, -1.15, t);
+      PlayerVis.mesh.rotation.x = PlayerVis.mix(-0.08, 0.1, t);
+      PlayerVis.mesh.rotation.z = PlayerVis.mix(-0.1, 0.06, t);
+      PlayerVis.setRodFlex(Math.sin(t * Math.PI) * 0.95);
+      return;
+    }
+
+    PlayerVis.pose = 'cast-follow-through';
+    const t = (normalized - 0.62) / 0.38;
+    parts.armR.rotation.x = PlayerVis.mix(-1.62, -1.28, t);
+    parts.armR.rotation.z = PlayerVis.mix(0.05, 0, t);
+    parts.forearmR.rotation.x = PlayerVis.mix(-0.15, -0.42, t);
+    parts.armL.rotation.x = PlayerVis.mix(-1.05, -0.7, t);
+    parts.forearmL.rotation.x = PlayerVis.mix(-1.15, -0.8, t);
+    PlayerVis.mesh.rotation.x = PlayerVis.mix(0.1, 0.02, t);
+    PlayerVis.mesh.rotation.z = PlayerVis.mix(0.06, 0, t);
+    PlayerVis.setRodFlex(PlayerVis.mix(0.45, 0.08, t));
+  },
+
+  poseFishing: (parts, time) => {
+    const pulseProgress = PlayerVis.tugTime > 0
+      ? 1 - PlayerVis.tugTime / 0.38
+      : 1;
+    const tug = PlayerVis.tugTime > 0
+      ? Math.sin(pulseProgress * Math.PI)
+      : 0;
+    const struggle = Math.sin(time * 9.5) * 0.08;
+    const pull = tug * (PlayerVis.tugSuccess ? 0.48 : -0.2);
+
+    PlayerVis.pose = tug > 0.05
+      ? (PlayerVis.tugSuccess ? 'fishing-pull' : 'fishing-slip')
+      : 'fishing-tension';
+    parts.armR.rotation.x = -1.05 + struggle - pull;
+    parts.forearmR.rotation.x = -0.62 - pull * 0.45;
+    parts.armL.rotation.x = -0.88 - struggle * 0.7 - pull * 0.55;
+    parts.forearmL.rotation.x = -1.12 + struggle;
+    parts.head.rotation.x = -0.12 - tug * 0.08;
+    PlayerVis.mesh.rotation.x = 0.07 + tug * 0.09;
+    PlayerVis.mesh.rotation.z = struggle * 0.18;
+    PlayerVis.setRodFlex(0.72 + Math.abs(struggle) + tug * 0.4);
+    if (PlayerVis.reel) PlayerVis.reel.rotation.x += 0.025;
+    if (PlayerVis.reelCrank) PlayerVis.reelCrank.rotation.x += 0.045;
+  },
+
+  poseReturn: (parts, time, dt) => {
+    const reelCycle = time * 11;
+    PlayerVis.pose = 'reeling';
+    parts.armR.rotation.x = -1.18 + Math.sin(reelCycle) * 0.1;
+    parts.forearmR.rotation.x = -0.48 + Math.cos(reelCycle) * 0.13;
+    parts.armL.rotation.x = -0.8 + Math.cos(reelCycle) * 0.18;
+    parts.forearmL.rotation.x = -1.1 + Math.sin(reelCycle) * 0.25;
+    PlayerVis.mesh.rotation.x = 0.055;
+    PlayerVis.mesh.rotation.z = Math.sin(reelCycle * 0.5) * 0.025;
+    PlayerVis.setRodFlex(0.5 + Math.sin(reelCycle) * 0.08);
+    if (PlayerVis.reel) PlayerVis.reel.rotation.x += dt * 18;
+    if (PlayerVis.reelCrank) PlayerVis.reelCrank.rotation.x += dt * 18;
+  },
+
   sync: (p, dt, time) => {
     const m = PlayerVis.mesh;
-    if (!m) return;
+    if (!m || !p) return;
+    const safeDt = Math.max(0, Math.min(Number(dt) || 0, 0.1));
+    const visualTime = Number(time) || 0;
     const parts = m.userData.parts;
-    const moving = Math.abs(p.vx) > 0.01 || Math.abs(p.vz) > 0.01;
+    const moving = Math.abs(p.vx || 0) > 0.01 || Math.abs(p.vz || 0) > 0.01;
 
     if (p.hook && p.hook !== PlayerVis.lastHook) {
       PlayerVis.lastHook = p.hook;
-      PlayerVis.beginCast({ x: p.hook.x + p.hook.vx, z: p.hook.z + p.hook.vz });
+      if (PlayerVis.castTime >= PlayerVis.castDuration) {
+        PlayerVis.beginCast({
+          x: p.hook.x + (p.hook.vx || 0),
+          z: p.hook.z + (p.hook.vz || 0)
+        });
+      }
     } else if (!p.hook) {
       PlayerVis.lastHook = null;
     }
-    PlayerVis.castTime += dt;
 
-    if (moving) {
-      PlayerVis.walkTime += dt * 9;
-      m.rotation.y = Math.atan2(p.vx, p.vz);
-    }
+    PlayerVis.castTime += safeDt;
+    PlayerVis.tugTime = Math.max(0, PlayerVis.tugTime - safeDt);
+    if (moving) PlayerVis.walkTime += safeDt * 9;
+    PlayerVis.resetJoints(parts);
+
     const swing = moving ? Math.sin(PlayerVis.walkTime) : 0;
-    // Rebote al caminar; respiración en reposo
-    const bob = moving ? Math.abs(Math.sin(PlayerVis.walkTime)) * 0.08 : Math.sin(time * 2) * 0.015;
+    const bob = moving
+      ? Math.abs(Math.sin(PlayerVis.walkTime)) * 0.075
+      : Math.sin(visualTime * 1.8) * 0.012;
     m.position.set(p.x, 0.35 + bob, p.z);
+    m.rotation.x = 0;
+    m.rotation.z = 0;
 
-    if ((p.rowAnim || 0) > 0) {
-      // Postura breve de remo después de cada palada. El trayecto automático
-      // hasta el borde conserva la animación de caminar.
-      m.rotation.x = 0.3;
-      if (PlayerVis.rod) PlayerVis.rod.visible = false;
-      const rowSwing = Math.sin(time * 8) * 0.35;
-      parts.armL.rotation.x = -1.1 + rowSwing;
-      parts.armR.rotation.x = -1.1 + rowSwing;
-      parts.legL.rotation.x = 0;
-      parts.legR.rotation.x = 0;
-    } else if (p.hook) {
+    if (p.hook) {
       const aimX = p.hook.x - p.x;
       const aimZ = p.hook.z - p.z;
       if (Math.hypot(aimX, aimZ) > 0.05) m.rotation.y = Math.atan2(aimX, aimZ);
-      m.rotation.x = 0;
-      if (PlayerVis.rod) PlayerVis.rod.visible = true;
-
-      const castT = Math.min(1, PlayerVis.castTime / PlayerVis.castDuration);
-      if (castT < 0.32) {
-        // Preparación: lleva la caña detrás del hombro.
-        const t = castT / 0.32;
-        parts.armR.rotation.x = -0.75 + t * 1.5;
-        parts.armL.rotation.x = 0.25;
-        m.rotation.z = -0.08 * t;
-      } else if (castT < 0.68) {
-        // Latigazo de lanzamiento.
-        const t = (castT - 0.32) / 0.36;
-        const eased = 1 - Math.pow(1 - t, 3);
-        parts.armR.rotation.x = 0.75 - eased * 2.45;
-        parts.armL.rotation.x = 0.25 - eased * 0.45;
-        m.rotation.z = -0.08 + eased * 0.13;
-      } else if (p.hook.fishing) {
-        // Mantiene tensión mientras el mundo está pausado por el minijuego.
-        const struggle = Math.sin(time * 11);
-        parts.armR.rotation.x = -1.05 + struggle * 0.22;
-        parts.armL.rotation.x = -0.75 - struggle * 0.16;
-        m.rotation.x = 0.08 + Math.max(0, struggle) * 0.05;
-        m.rotation.z = struggle * 0.035;
-      } else if (p.hook.returning) {
-        // Pequeños tirones al recoger el sedal.
-        parts.armR.rotation.x = -1.15 + Math.sin(time * 10) * 0.13;
-        parts.armL.rotation.x = -0.55 + Math.cos(time * 10) * 0.1;
-      } else {
-        parts.armR.rotation.x = -1.35;
-        parts.armL.rotation.x = -0.15;
-      }
-      parts.legL.rotation.x = 0;
-      parts.legR.rotation.x = 0;
-    } else {
-      if (PlayerVis.rod) PlayerVis.rod.visible = PlayerVis.castTime < PlayerVis.castDuration;
-      m.rotation.x = moving ? 0.08 : 0;
-      parts.armL.rotation.x = moving ? swing * 0.7 : Math.sin(time * 2) * 0.05;
-      parts.armR.rotation.x = moving ? -swing * 0.7 : Math.cos(time * 2) * 0.05;
-      parts.legL.rotation.x = moving ? -swing * 0.6 : 0;
-      parts.legR.rotation.x = moving ? swing * 0.6 : 0;
+    } else if (moving) {
+      m.rotation.y = Math.atan2(p.vx, p.vz);
     }
-    if (!p.hook || PlayerVis.castTime >= PlayerVis.castDuration) m.rotation.z = 0;
+
+    const casting = !!p.hook && PlayerVis.castTime < PlayerVis.castDuration;
+    if (PlayerVis.rod) PlayerVis.rod.visible = !!p.hook || casting;
+
+    if ((p.rowAnim || 0) > 0) {
+      PlayerVis.pose = 'rowing';
+      if (PlayerVis.rod) PlayerVis.rod.visible = false;
+      const rowSwing = Math.sin(visualTime * 8) * 0.35;
+      parts.armL.rotation.x = -1.1 + rowSwing;
+      parts.armR.rotation.x = -1.1 + rowSwing;
+      parts.forearmL.rotation.x = -0.45;
+      parts.forearmR.rotation.x = -0.45;
+      m.rotation.x = 0.28;
+    } else if (casting) {
+      PlayerVis.poseCast(parts, PlayerVis.castTime / PlayerVis.castDuration);
+    } else if (p.hook?.fishing) {
+      PlayerVis.poseFishing(parts, visualTime);
+    } else if (p.hook?.returning) {
+      PlayerVis.poseReturn(parts, visualTime, safeDt);
+    } else if (p.hook) {
+      PlayerVis.pose = 'line-out';
+      parts.armR.rotation.x = -1.28;
+      parts.forearmR.rotation.x = -0.42;
+      parts.armL.rotation.x = -0.7;
+      parts.forearmL.rotation.x = -0.8;
+      parts.head.rotation.x = -0.08;
+      PlayerVis.setRodFlex(0.08 + Math.sin(visualTime * 2.2) * 0.025);
+    } else if (moving) {
+      PlayerVis.pose = 'walking';
+      m.rotation.x = 0.06;
+      m.rotation.z = Math.cos(PlayerVis.walkTime) * 0.018;
+      parts.armL.rotation.x = swing * 0.72;
+      parts.armR.rotation.x = -swing * 0.72;
+      parts.forearmL.rotation.x = -0.12 - Math.max(0, swing) * 0.18;
+      parts.forearmR.rotation.x = -0.12 + Math.min(0, swing) * 0.18;
+      parts.legL.rotation.x = -swing * 0.62;
+      parts.legR.rotation.x = swing * 0.62;
+      parts.head.rotation.y = -swing * 0.06;
+    } else {
+      PlayerVis.pose = 'idle';
+      const breath = Math.sin(visualTime * 1.8);
+      parts.body.scale.y = 1 + breath * 0.012;
+      parts.armL.rotation.x = breath * 0.035;
+      parts.armR.rotation.x = -breath * 0.035;
+      parts.forearmL.rotation.x = -0.08;
+      parts.forearmR.rotation.x = -0.08;
+      parts.head.rotation.y = Math.sin(visualTime * 0.55) * 0.08;
+    }
   },
 
-  // Actualiza la línea de apuntado hacia el cursor del mundo
   updateAim: (p, target) => {
     if (!PlayerVis.aimLine) return;
-    if (!target) { PlayerVis.aimLine.visible = false; return; }
+    if (!target || p.hook) {
+      PlayerVis.aimLine.visible = false;
+      return;
+    }
     PlayerVis.aimLine.visible = true;
-    const pos = PlayerVis.aimLine.geometry.attributes.position;
+    const positions = PlayerVis.aimLine.geometry.attributes.position;
     const dx = target.x - p.x;
     const dz = target.z - p.z;
-    const len = Math.hypot(dx, dz) || 1;
-    const aimLen = Math.min(len, 2.2);
-    pos.setXYZ(0, p.x, 1.0, p.z);
-    pos.setXYZ(1, p.x + (dx / len) * aimLen, 1.0, p.z + (dz / len) * aimLen);
-    pos.needsUpdate = true;
+    const length = Math.hypot(dx, dz) || 1;
+    const aimLength = Math.min(length, 2.4);
+    positions.setXYZ(0, p.x, 0.95, p.z);
+    positions.setXYZ(
+      1,
+      p.x + dx / length * aimLength,
+      0.32,
+      p.z + dz / length * aimLength
+    );
+    positions.needsUpdate = true;
     PlayerVis.aimLine.computeLineDistances();
   }
 };
