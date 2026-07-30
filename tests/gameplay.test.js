@@ -218,7 +218,7 @@ test('economía, producción y recogida fraccionaria', () => {
     Game.collectObject(barrelFixture);
     Game.collectObject(barrelFixture);
   `);
-  assert.equal(run('Game.resources.water'), 0.4);
+  assert.equal(run('Game.resources.water'), 0.35);
   assert.equal(run('Game.resources.plastic'), 0.2);
   assert.equal(run('Game.stats.gathered'), 1);
 });
@@ -650,15 +650,19 @@ test('habilidades, carga, almacenamiento e interfaz', () => {
     var skilledFixture = new Survivor();
     skilledFixture.skill = SKILLS.find(skill => skill.key === 'cook');
     skilledFixture.trait = TRAITS.find(trait => trait.key === 'conflictive');
+    skilledFixture.job = 'cook';
+    skilledFixture.stress = 20;
     CrewManager.members = [skilledFixture];
   `);
   assert.equal(run('CrewManager.getDailyFoodNeed()'), 0.9);
-  assert.equal(run('CrewManager.getConflictChance()'), 0.15);
+  assert.ok(Math.abs(run('CrewManager.getConflictChance()') - 0.0825) < 1e-9);
   assert.equal(run("BuildManager.realCost('storage', -0.15).wood"), 3.4);
-  run("skilledFixture.skill = SKILLS.find(skill => skill.key === 'fisher');");
-  assert.equal(run('CrewManager.getFishingBonus()'), 0.3);
-  run("skilledFixture.skill = SKILLS.find(skill => skill.key === 'mechanic'); Game.raft.grid.clear(); Game.raft.placeAt(0, 0, 'radio', true, CrewManager.getDurabilityBonus());");
-  assert.equal(run('Game.raft.get(0, 0).maxHealth'), 44);
+  run("skilledFixture.skill = SKILLS.find(skill => skill.key === 'fisher'); skilledFixture.job = 'fish';");
+  assert.ok(run('CrewManager.getFishingBonus()') > 0.2);
+  assert.ok(run('CrewManager.getFishingBonus()') < 0.3);
+  run("skilledFixture.skill = SKILLS.find(skill => skill.key === 'mechanic'); skilledFixture.job = 'repair'; Game.raft.grid.clear(); Game.raft.placeAt(0, 0, 'radio', true, CrewManager.getDurabilityBonus());");
+  assert.ok(run('Game.raft.get(0, 0).maxHealth') > 35);
+  assert.ok(run('Game.raft.get(0, 0).maxHealth') < 44);
 
   resetRaft([['0,0', 'storage', 40]]);
   assert.equal(run('Game.raft.maxWeight()'), 12.5);
@@ -749,6 +753,15 @@ test('guardados inválidos se sanean', () => {
     var fallbackCellFixture = Game.raft.has(0, 0);
     var fallbackPlayerCellFixture =
       Game.raft.worldToGrid(Game.player.x, Game.player.z);
+    var sanitizedCrewStateFixture = Survivor.fromData({
+      name: 'Estado inválido',
+      skill: { key: 'medic' },
+      job: 'imposible',
+      trust: 999,
+      stress: -50,
+      deprivationDays: 999,
+      hostile: true
+    });
   `);
   assert.equal(run('fallbackCellFixture'), true);
   assert.equal(run('Game.raft.grid.size'), 1);
@@ -756,6 +769,11 @@ test('guardados inválidos se sanean', () => {
   assert.equal(run('fallbackPlayerCellFixture.gx'), 0);
   assert.equal(run('fallbackPlayerCellFixture.gy'), 0);
   assert.equal(run('CrewManager.members.length'), 0);
+  assert.equal(run('sanitizedCrewStateFixture.job'), 'care');
+  assert.equal(run('sanitizedCrewStateFixture.trust'), 100);
+  assert.equal(run('sanitizedCrewStateFixture.stress'), 0);
+  assert.equal(run('sanitizedCrewStateFixture.deprivationDays'), 30);
+  assert.equal(run('sanitizedCrewStateFixture.hostile'), true);
 });
 
 test('historias de náufragos aportan valor y riesgo persistente', () => {
@@ -788,6 +806,12 @@ test('historias de náufragos aportan valor y riesgo persistente', () => {
 
     var fisherWorkFixture = new Survivor();
     fisherWorkFixture.skill = SKILLS.find(skill => skill.key === 'fisher');
+    fisherWorkFixture.job = 'fish';
+    fisherWorkFixture.health = 100;
+    fisherWorkFixture.hunger = 80;
+    fisherWorkFixture.thirst = 80;
+    fisherWorkFixture.stress = 15;
+    fisherWorkFixture.trust = 50;
     fisherWorkFixture.storyResolved = true;
     CrewManager.members = [fisherWorkFixture];
     Game.resources.food = 0;
@@ -802,8 +826,187 @@ test('historias de náufragos aportan valor y riesgo persistente', () => {
   assert.equal(run('Game.navigationIntel'), 20);
   assert.equal(run("restoredStoryFixture.story"), 'folded_chart');
   assert.equal(run('restoredStoryFixture.storyResolved'), true);
-  assert.ok(Math.abs(run('Game.resources.food') - 0.3) < 1e-9);
+  assert.ok(run('Game.resources.food') > 0.25);
+  assert.ok(run('Game.resources.food') < 0.35);
   assert.equal(run('workNotesFixture.length'), 1);
+});
+
+test('las tareas dependen del estado y los NPC colaboran o estorban', () => {
+  resetRaft([['0,0', 'floor', 50]]);
+  run(`
+    var workerFixture = new Survivor();
+    workerFixture.name = 'Irene Prueba';
+    workerFixture.skill = SKILLS.find(skill => skill.key === 'fisher');
+    workerFixture.job = 'fish';
+    workerFixture.health = 100;
+    workerFixture.hunger = 80;
+    workerFixture.thirst = 80;
+    workerFixture.trust = 65;
+    workerFixture.stress = 15;
+    CrewManager.members = [workerFixture];
+    Game.resources.food = 0;
+    var workerEfficiencyFixture = CrewManager.workEfficiency(workerFixture);
+    CrewManager.applyDailyWork(Game);
+    var workerFoodFixture = Game.resources.food;
+
+    Game.resources.water = 0;
+    var helpRollsFixture = [0, 0];
+    var helpReportFixture = CrewManager.resolveDailyBehavior(
+      Game,
+      () => helpRollsFixture.shift() ?? 1
+    );
+
+    workerFixture.hunger = 20;
+    workerFixture.thirst = 20;
+    workerFixture.stress = 60;
+    workerFixture.trust = 30;
+    workerFixture.incidentCooldown = 0;
+    Game.resources.food = 1;
+    Game.resources.water = 1;
+    var troubleRollsFixture = [0.9, 0, 0];
+    var troubleReportFixture = CrewManager.resolveDailyBehavior(
+      Game,
+      () => troubleRollsFixture.shift() ?? 1
+    );
+  `);
+  assert.ok(run('workerEfficiencyFixture') > 0.7);
+  assert.ok(run('workerFoodFixture') > 0.25);
+  assert.ok(run('workerFoodFixture') < 1);
+  assert.equal(run('helpReportFixture.messages.length'), 1);
+  assert.equal(run('Game.resources.food') < 1 || run('Game.resources.water') < 1, true);
+  assert.equal(run('troubleReportFixture.messages.length'), 1);
+  assert.ok(run('workerFixture.incidentCooldown') > 0);
+});
+
+test('la escasez castiga reservas sin almacenamiento de forma moderada', () => {
+  resetRaft([['0,0', 'floor', 50]]);
+  run(`
+    Game.stats.rescued = 0;
+    var spoilageNoteFixture = null;
+    var spoilageDayFixture = 0;
+    for (var testedDayFixture = 3; testedDayFixture <= 40; testedDayFixture++) {
+      Game.day = testedDayFixture;
+      Game.resources.food = 2;
+      Game.resources.water = 2;
+      spoilageNoteFixture = Game.resolveUnstoredSpoilage();
+      if (spoilageNoteFixture) {
+        spoilageDayFixture = testedDayFixture;
+        break;
+      }
+    }
+    var spoiledFoodFixture = Game.resources.food;
+    var spoiledWaterFixture = Game.resources.water;
+  `);
+  assert.ok(run('spoilageDayFixture') >= 3);
+  assert.match(run('spoilageNoteFixture'), /almacenamiento/i);
+  assert.ok(run('spoiledFoodFixture') >= 1.75);
+  assert.ok(run('spoiledWaterFixture') >= 1.65);
+
+  resetRaft([['0,0', 'storage', 40]]);
+  run(`
+    Game.day = spoilageDayFixture;
+    Game.resources.food = 2;
+    Game.resources.water = 2;
+    var protectedSpoilageFixture = Game.resolveUnstoredSpoilage();
+  `);
+  assert.equal(run('protectedSpoilageFixture'), null);
+  assert.equal(run('Game.resources.food'), 2);
+  assert.equal(run('Game.resources.water'), 2);
+});
+
+test('la privación provoca alucinaciones y una crisis hostil telegrafiada', () => {
+  run(`
+    var deprivedFixture = new Survivor();
+    deprivedFixture.name = 'Mara Sedienta';
+    deprivedFixture.health = 100;
+    deprivedFixture.hunger = 80;
+    deprivedFixture.thirst = 80;
+    for (var dryDayFixture = 0; dryDayFixture < 6; dryDayFixture++) {
+      deprivedFixture.updateDaily(1, 0, false);
+    }
+    var hallucinatedBeforeCrisisFixture = deprivedFixture.hallucinating;
+    deprivedFixture.trust = 20;
+    deprivedFixture.stress = 92;
+    deprivedFixture.hostile = false;
+    CrewManager.members = [deprivedFixture];
+    Game.day = 8;
+    Game.resources.food = 0;
+    Game.resources.water = 0;
+    var deprivationReportFixture = CrewManager.resolveDailyBehavior(
+      Game,
+      () => 0
+    );
+  `);
+  assert.equal(run('hallucinatedBeforeCrisisFixture'), true);
+  assert.equal(run('deprivedFixture.alive'), true);
+  assert.equal(run('deprivedFixture.getCondition().key'), 'hostile');
+  assert.equal(run('deprivationReportFixture.conflict.member === deprivedFixture'), true);
+  assert.match(run('deprivationReportFixture.messages.join(" ")'), /alucina/i);
+});
+
+test('las confrontaciones permiten calmar, reducir o morir en el forcejeo', () => {
+  run(`
+    Game.state = 'playing';
+    Game.paused = false;
+    Game.stats.deathCause = '';
+    Game.resetPlayerState({ health: 100, stamina: 100 });
+    Game.resources.food = 1;
+    Game.resources.water = 1;
+    var conflictMemberFixture = new Survivor();
+    conflictMemberFixture.name = 'Pablo Crisis';
+    conflictMemberFixture.hostile = true;
+    conflictMemberFixture.hallucinating = true;
+    CrewManager.members = [conflictMemberFixture];
+    var startedRationFixture = Game.startCrewConflict(
+      conflictMemberFixture,
+      'delirio por deshidratación'
+    );
+    var rationResolvedFixture = Game.requestCrewConflictRation();
+    var foodAfterRationFixture = Game.resources.food;
+    var waterAfterRationFixture = Game.resources.water;
+
+    conflictMemberFixture.hostile = true;
+    conflictMemberFixture.restrainedDays = 0;
+    Game.player.stamina = 100;
+    Game.startCrewConflict(conflictMemberFixture, 'delirio por hambre');
+    while (Game.crewConflict.active) {
+      Game.crewConflict.pushCooldown = 0;
+      Game.requestCrewConflictPush();
+    }
+    var restrainedFixture = conflictMemberFixture.restrainedDays;
+
+    Game.state = 'playing';
+    Game.player.health = 100;
+    conflictMemberFixture.hostile = true;
+    conflictMemberFixture.restrainedDays = 0;
+    conflictMemberFixture.criticalDays = 2;
+    var crewVictimFixture = new Survivor();
+    crewVictimFixture.name = 'Víctima de prueba';
+    crewVictimFixture.health = 40;
+    CrewManager.members = [conflictMemberFixture, crewVictimFixture];
+    Game.startCrewConflict(conflictMemberFixture, 'delirio por hambre');
+    Game.finishCrewConflict('failed');
+    var crewVictimAliveFixture = crewVictimFixture.alive;
+
+    Game.state = 'playing';
+    Game.stats.deathCause = '';
+    Game.player.health = 20;
+    conflictMemberFixture.hostile = true;
+    conflictMemberFixture.restrainedDays = 0;
+    conflictMemberFixture.criticalDays = 1;
+    CrewManager.members = [conflictMemberFixture];
+    Game.startCrewConflict(conflictMemberFixture, 'delirio por hambre');
+    Game.finishCrewConflict('failed');
+    var conflictDeathCauseFixture = Game.stats.deathCause;
+  `);
+  assert.equal(run('startedRationFixture'), true);
+  assert.equal(run('rationResolvedFixture'), true);
+  assert.equal(run('foodAfterRationFixture'), 0.5);
+  assert.equal(run('waterAfterRationFixture'), 0.35);
+  assert.equal(run('restrainedFixture'), 1);
+  assert.equal(run('crewVictimAliveFixture'), false);
+  assert.equal(run('Game.state'), 'end');
+  assert.match(run('conflictDeathCauseFixture'), /crisis/i);
 });
 
 test('minijuego de pesca pausa el mundo y resuelve captura o escape', () => {
@@ -894,6 +1097,9 @@ test('supervivencia diaria, recuperación y autoguardado', () => {
     var medicFixture = new Survivor();
     medicFixture.skill = SKILLS.find(skill => skill.key === 'medic');
     medicFixture.trait = TRAITS.find(trait => trait.key === 'fearful');
+    medicFixture.job = 'care';
+    medicFixture.stress = 15;
+    medicFixture.incidentCooldown = 2;
     medicFixture.storyResolved = true;
     medicFixture.storyDaysRemaining = 0;
     CrewManager.members = [medicFixture];
@@ -901,7 +1107,8 @@ test('supervivencia diaria, recuperación y autoguardado', () => {
     Object.assign(Game.player, { health: 50, hunger: 90, thirst: 90, morale: 60, sanity: 80 });
     Game.state = 'playing'; Game.endDay();
   `);
-  assert.equal(run('Game.player.health'), 56);
+  assert.ok(run('Game.player.health') > 56);
+  assert.ok(run('Game.player.health') < 57);
   assert.equal(run('Game.player.morale'), 65);
 });
 

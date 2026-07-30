@@ -36,6 +36,8 @@
           <li><strong>Motor</strong>: usa E para transformar 1 plástico en 2 de combustible</li>
           <li><strong>Tiburones</strong>: aléjate más de una casilla del marcador o golpéalos con el gancho</li>
           <li><strong>Corales</strong>: desvía la balsa con el remo, timón o motor; encallar puede destruir módulos</li>
+          <li><strong>Tripulación</strong>: asigna tareas, vigila sus reservas, confianza y estrés</li>
+          <li><strong>Crisis</strong>: ofrece una ración o pulsa E repetidamente para reducir a un tripulante hostil</li>
           <li><strong>B</strong>: abrir menú de construcción</li>
           <li><strong>Escape</strong>: cancelar colocación / cerrar menús</li>
           <li><strong>Espacio</strong>: pausar</li>
@@ -47,7 +49,7 @@
         <button id="btn-new-game">Nueva partida</button>
         <button id="btn-continue" class="secondary">Continuar guardado</button>
       </div>
-      <p class="version">v1.7 · Amenazas y experiencia visual renovadas</p>
+      <p class="version">v1.8 · Tripulación dinámica, escasez y crisis a bordo</p>
     </div>
   </div>
 
@@ -150,6 +152,7 @@
     <div id="status-panel">
       <div class="panel-heading"><span>Estado de la balsa</span><small>En directo</small></div>
       <div class="status-row"><span>Consumo diario</span><strong><span id="daily-food">1</span> 🍖 · <span id="daily-water">1.3</span> 💧</strong></div>
+      <div class="status-row"><span>Reservas</span><strong id="reserve-status">—</strong></div>
       <div class="status-row"><span>Estructura</span><strong id="structural-health">100%</strong></div>
       <div class="status-row"><span>Remo</span><strong id="rowing-status">listo</strong></div>
       <div class="status-row status-navigation"><span>Navegación</span><strong id="navigation-status">a la deriva</strong></div>
@@ -216,6 +219,27 @@
       </div>
     </div>
 
+    <!-- Confrontación con un tripulante en crisis -->
+    <div id="crew-conflict-panel" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="crew-conflict-title" aria-describedby="crew-conflict-text">
+      <div class="modal-content conflict-content">
+        <p class="eyebrow">Crisis a bordo</p>
+        <h3 id="crew-conflict-title">Tripulante hostil</h3>
+        <p id="crew-conflict-text">Mantén la distancia y trata de reducirlo.</p>
+        <div class="conflict-status">
+          <span id="crew-conflict-timer">Tiempo: 8.0 s</span>
+          <span id="crew-conflict-stamina">Energía: 100</span>
+        </div>
+        <div id="crew-conflict-track" aria-label="Nivel de peligro de la confrontación">
+          <div id="crew-conflict-fill"></div>
+        </div>
+        <p id="crew-conflict-feedback">Usa una ración para calmarlo o pulsa E para empujarlo.</p>
+        <div class="conflict-actions">
+          <button id="btn-conflict-ration" type="button">Dar 0,5 🍖 y 0,7 💧</button>
+          <button id="btn-conflict-push" type="button">Bloquear y empujar (E)</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Menú de construcción -->
     <div id="build-menu" class="modal hidden">
       <div class="modal-content wide">
@@ -239,6 +263,7 @@
           <h3>Tripulación</h3>
           <button class="close-btn" id="close-crew">✕</button>
         </div>
+        <div id="crew-overview"></div>
         <div id="crew-list"></div>
       </div>
     </div>

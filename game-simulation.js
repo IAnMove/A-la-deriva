@@ -45,6 +45,14 @@ const GameSimulation = Object.freeze({
       Input.resetClick();
       return;
     }
+    if (game.crewConflict?.active) {
+      game.updateCrewConflict(dt);
+      if (Input.wasPressed('KeyE') || Input.wasPressed('Space')) {
+        game.requestCrewConflictPush();
+      }
+      Input.resetClick();
+      return;
+    }
     if (game.menuModalOpen() && Input.wasPressed('Escape')) {
       game.closeAllModals();
       game.raft.selected = null;
@@ -195,6 +203,8 @@ const GameSimulation = Object.freeze({
     game.rowingBoostZ = 0;
     game.rowingCooldown = 0;
     game.hallucinationTimer = 0;
+    game.crewConflict = { active: false };
+    game.pendingDaySummary = null;
     game.mouseWorld = null;
     game.elapsed = 0;
     if (typeof GameRenderer !== 'undefined') GameRenderer.visualElapsed = 0;
@@ -692,6 +702,30 @@ const GameSimulation = Object.freeze({
       return true;
     }
     return false;
+  },
+
+  resolveUnstoredSpoilage(game) {
+    if (!game?.resources || !game.raft ||
+        game.raft.countProvides('storage') > 0 ||
+        game.day <= 2) return null;
+    const seed = (
+      Math.imul(Math.floor(game.day), 2654435761) ^
+      Math.imul(Math.floor(game.stats?.rescued || 0) + 1, 2246822519)
+    ) >>> 0;
+    const roll = seed / 4294967296;
+    if (roll >= 0.18) return null;
+    const foodLost = Math.min(
+      Math.max(0, game.resources.food || 0),
+      Math.min(0.25, (game.resources.food || 0) * 0.12)
+    );
+    const waterLost = Math.min(
+      Math.max(0, game.resources.water || 0),
+      Math.min(0.35, (game.resources.water || 0) * 0.12)
+    );
+    if (foodLost <= 0 && waterLost <= 0) return null;
+    game.resources.food = Math.max(0, game.resources.food - foodLost);
+    game.resources.water = Math.max(0, game.resources.water - waterLost);
+    return `Sin almacenamiento se estropearon ${foodLost.toFixed(1)} de comida y ${waterLost.toFixed(1)} de agua.`;
   },
 
   getDailyNeeds(game) {

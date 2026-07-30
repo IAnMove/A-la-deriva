@@ -58,11 +58,62 @@ const GameUI = Object.freeze({
     }
   },
 
+  updateCrewConflictUI(game) {
+    const conflict = game.crewConflict;
+    if (!conflict?.active) return;
+    const member = conflict.member;
+    const title = document.getElementById('crew-conflict-title');
+    const text = document.getElementById('crew-conflict-text');
+    const timer = document.getElementById('crew-conflict-timer');
+    const stamina = document.getElementById('crew-conflict-stamina');
+    const fill = document.getElementById('crew-conflict-fill');
+    const feedback = document.getElementById('crew-conflict-feedback');
+    const push = document.getElementById('btn-conflict-push');
+    const ration = document.getElementById('btn-conflict-ration');
+    if (title) title.textContent = `${member?.name || 'Un tripulante'} ha perdido el control`;
+    if (text) {
+      const targetName = conflict.target === game.player
+        ? 'al personaje principal'
+        : `a ${conflict.target?.name || 'otro tripulante'}`;
+      text.textContent =
+        `${conflict.cause}. Está amenazando ${targetName}; si el peligro llega al máximo puede matarlo.`;
+    }
+    if (timer) timer.textContent = `Tiempo: ${Math.max(0, conflict.timeLeft).toFixed(1)} s`;
+    if (stamina) stamina.textContent = `Energía: ${Math.round(game.player.stamina)}`;
+    if (fill) fill.style.width = `${Util.clamp(conflict.tension, 0, 100)}%`;
+    if (feedback) feedback.textContent = conflict.feedback;
+    if (push) push.disabled =
+      conflict.pushCooldown > 0 || game.player.stamina < 8;
+    if (ration) {
+      ration.disabled =
+        (game.resources.food || 0) < 0.5 ||
+        (game.resources.water || 0) < 0.65;
+    }
+  },
+
+  updateCrewOverview(game) {
+    const overview = document.getElementById('crew-overview');
+    if (!overview) return;
+    const reserves = CrewManager.getReserveEstimate(game);
+    const critical = CrewManager.members.filter(member =>
+      member.alive &&
+      (member.hallucinating || member.hostile || member.stress >= 70)
+    ).length;
+    overview.innerHTML = `
+      <strong>${CrewManager.count()} a bordo</strong> ·
+      Reservas para ${reserves.foodDays.toFixed(1)} días de comida y
+      ${reserves.waterDays.toFixed(1)} de agua ·
+      ${critical > 0
+        ? `<span style="color:var(--danger)">${critical} en crisis</span>`
+        : '<span style="color:var(--success)">grupo estable</span>'}
+    `;
+  },
+
   showEventMessage(game, text) {
     const element = document.getElementById('event-message');
     element.textContent = text;
     const normalized = String(text).toLowerCase();
-    const severity = /tibur|coral|encall|devor|muert|ataque|golpe|tormenta|ola/.test(normalized)
+    const severity = /tibur|coral|encall|devor|muert|ataque|golpe|tormenta|ola|hostil|crisis/.test(normalized)
       ? 'danger'
       : /aviso|calor|daño|hambre|sed|cansad/.test(normalized)
         ? 'warning'
@@ -191,6 +242,18 @@ const GameUI = Object.freeze({
       (needs.playerFoodFromStores + needs.crewFood).toFixed(1);
     document.getElementById('daily-water').textContent =
       (needs.playerWater + needs.crewWater).toFixed(1);
+    const reserves = CrewManager.getReserveEstimate(game);
+    const reserveStatus = document.getElementById('reserve-status');
+    if (reserveStatus) {
+      reserveStatus.textContent =
+        `${reserves.foodDays.toFixed(1)} d 🍖 · ${reserves.waterDays.toFixed(1)} d 💧`;
+      const minimumReserve = Math.min(reserves.foodDays, reserves.waterDays);
+      reserveStatus.style.color = minimumReserve < 0.75
+        ? 'var(--danger)'
+        : minimumReserve < 1.5
+          ? 'var(--warning)'
+          : 'var(--success)';
+    }
     let totalHealth = 0;
     let totalMax = 0;
     for (const cell of game.raft.grid.values()) {

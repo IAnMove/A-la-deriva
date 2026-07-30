@@ -76,8 +76,16 @@ assert.match(
 );
 assert.doesNotMatch(html, /<span>Cansancio<\/span>[\s\S]*?id="bar-stamina"/);
 assert.match(html, /id="threat-panel"[\s\S]*?id="threat-detail"/);
+assert.match(
+  html,
+  /id="crew-conflict-panel"[\s\S]*?id="btn-conflict-ration"[\s\S]*?id="btn-conflict-push"/
+);
+assert.match(html, /id="reserve-status"/);
+assert.match(html, /id="crew-overview"/);
 assert.match(html, /class="panel hero-panel"/);
 assert.match(css, /#threat-panel\.critical/);
+assert.match(css, /\.crew-condition\.critical/);
+assert.match(css, /#crew-conflict-track/);
 assert.match(css, /backdrop-filter:\s*blur\(14px\)/);
 
 console.log('✓ feedback por severidad, HUD profesional y avisos de amenazas');

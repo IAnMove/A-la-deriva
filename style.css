@@ -440,7 +440,7 @@ button.danger { background: linear-gradient(180deg, #ff7043, #d84315); color: #f
 .crew-story-detail { margin-top: 3px; font-size: 0.78rem; line-height: 1.35; color: var(--text); }
 .crew-bars { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
 .crew-bars .bar { margin: 0; }
-.crew-bars span { width: 46px; font-size: 0.75rem; }
+.crew-bars span { width: 62px; font-size: 0.7rem; }
 
 .log-entry {
   font-size: 0.85rem;
@@ -604,6 +604,168 @@ button.danger { background: linear-gradient(180deg, #ff7043, #d84315); color: #f
 
 #fishing-track.success::before { content: "¡Buen tirón! ✓"; }
 #fishing-track.failure::before { content: "Fuera de zona ✕"; }
+
+.conflict-content {
+  width: min(92vw, 520px);
+  border: 1px solid rgba(255, 93, 104, 0.58);
+  background:
+    radial-gradient(circle at 50% 0, rgba(160, 30, 44, 0.22), transparent 46%),
+    linear-gradient(145deg, rgba(49, 18, 27, 0.98), rgba(8, 21, 31, 0.99));
+}
+
+.conflict-content h3 {
+  margin: 4px 0 8px;
+  color: #ffe3e5;
+}
+
+.conflict-status,
+.conflict-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.conflict-status {
+  color: #ffd6d9;
+  font-size: 0.78rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+#crew-conflict-track {
+  height: 18px;
+  margin: 11px 0;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 999px;
+  background: rgba(0, 4, 8, 0.6);
+  box-shadow: inset 0 2px 6px rgba(0,0,0,0.45);
+}
+
+#crew-conflict-fill {
+  width: 60%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--warning), var(--danger));
+  box-shadow: 0 0 18px rgba(255, 76, 91, 0.45);
+  transition: width 0.16s ease-out;
+}
+
+#crew-conflict-feedback {
+  min-height: 2.8em;
+  color: #d9e6eb;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.conflict-actions button {
+  flex: 1;
+  min-height: 50px;
+}
+
+#btn-conflict-ration {
+  border-color: rgba(103, 216, 255, 0.3);
+  background: linear-gradient(135deg, #167c9c, #0a5d78);
+}
+
+#crew-overview {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(103, 216, 255, 0.14);
+  border-radius: 11px;
+  background: rgba(0, 8, 14, 0.3);
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.crew-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.crew-condition {
+  padding: 3px 8px;
+  border: 1px solid rgba(91, 222, 159, 0.3);
+  border-radius: 999px;
+  background: rgba(91, 222, 159, 0.1);
+  color: var(--success);
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.crew-condition.caution,
+.crew-condition.warning {
+  border-color: rgba(255, 200, 87, 0.4);
+  background: rgba(255, 200, 87, 0.1);
+  color: var(--warning);
+}
+
+.crew-condition.critical {
+  border-color: rgba(255, 93, 104, 0.5);
+  background: rgba(255, 93, 104, 0.12);
+  color: #ffadb4;
+}
+
+.crew-member.crew-warning { border-color: rgba(255, 200, 87, 0.28); }
+.crew-member.crew-critical {
+  border-color: rgba(255, 93, 104, 0.42);
+  background: rgba(73, 14, 24, 0.28);
+}
+
+.crew-job {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) minmax(150px, 0.8fr);
+  align-items: center;
+  gap: 5px 10px;
+  margin-top: 10px;
+  padding: 8px 9px;
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 9px;
+  background: rgba(0, 7, 12, 0.32);
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.crew-job select {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid rgba(103, 216, 255, 0.2);
+  border-radius: 7px;
+  background: #0b2636;
+  color: var(--text);
+}
+
+.crew-job small {
+  grid-column: 1 / -1;
+  color: var(--accent);
+}
+
+.crew-incident {
+  margin-top: 8px;
+  padding: 7px 9px;
+  border-left: 3px solid var(--warning);
+  background: rgba(255, 200, 87, 0.07);
+  color: #f2e4bd;
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.crew-expel {
+  width: 100%;
+  margin: 8px 0 0;
+  border-color: rgba(255, 93, 104, 0.28);
+  background: rgba(255, 93, 104, 0.1);
+  color: #ffc2c7;
+  box-shadow: none;
+}
+
+.fill.trust { background: linear-gradient(90deg, #287eaa, var(--accent)); }
+.fill.stress { background: linear-gradient(90deg, #e5ad45, #e05d65); }
 
 /* Experiencia visual profesional */
 .hero-panel {
@@ -1268,6 +1430,11 @@ button.danger { background: linear-gradient(180deg, #ff7043, #d84315); color: #f
     width: min(390px, calc(100vw - 18px));
     min-width: 0;
   }
+
+  .crew-job { grid-template-columns: 1fr; }
+  .crew-job small { grid-column: 1; }
+  .conflict-actions { flex-direction: column; }
+  .conflict-actions button { width: 100%; }
 
   .fishing-content { width: 94%; padding: 18px 14px; }
   #fishing-title { font-size: 1.25rem; }

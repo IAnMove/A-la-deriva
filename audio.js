@@ -77,6 +77,18 @@ const AudioSys = (() => {
           noise(0.42, 0.18);
           beep(125, 0.5, 'square', 0.12);
           break;
+        case 'conflict-warning':
+          beep(240, 0.14, 'sawtooth', 0.09);
+          setTimeout(() => beep(190, 0.2, 'sawtooth', 0.1), 130);
+          break;
+        case 'conflict-shove':
+          noise(0.12, 0.08);
+          beep(145, 0.12, 'square', 0.08);
+          break;
+        case 'conflict-calm':
+          beep(440, 0.15, 'sine', 0.07);
+          beep(660, 0.22, 'sine', 0.08);
+          break;
         case 'alert': beep(600, 0.15, 'square', 0.1); beep(600, 0.15, 'square', 0.1); break;
         case 'day': beep(523, 0.3, 'sine', 0.08); beep(659, 0.4, 'sine', 0.08); break;
         case 'win': beep(523, 0.2, 'sine', 0.1); beep(659, 0.2, 'sine', 0.1); beep(784, 0.4, 'sine', 0.1); break;

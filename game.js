@@ -69,6 +69,8 @@ const Game = {
   worldOffsetZ: 0,
   hallucinationTimer: 0,
   fishing: { active: false },
+  crewConflict: { active: false },
+  pendingDaySummary: null,
 
   // Meshes auxiliares
   ghostMesh: null,
@@ -443,7 +445,7 @@ const Game = {
     document.getElementById('btn-crew').onclick = () => {
       Game.paused = true;
       document.getElementById('crew-panel').classList.remove('hidden');
-      CrewManager.renderList(document.getElementById('crew-list'));
+      Game.renderCrewPanel();
     };
     document.getElementById('close-crew').onclick = () => {
       document.getElementById('crew-panel').classList.add('hidden');
@@ -466,6 +468,10 @@ const Game = {
     };
     const fishingButton = document.getElementById('btn-fishing-pull');
     if (fishingButton) fishingButton.onclick = Game.requestFishingPull;
+    const conflictPush = document.getElementById('btn-conflict-push');
+    if (conflictPush) conflictPush.onclick = Game.requestCrewConflictPush;
+    const conflictRation = document.getElementById('btn-conflict-ration');
+    if (conflictRation) conflictRation.onclick = Game.requestCrewConflictRation;
 
     document.querySelectorAll('#build-tabs .tab').forEach(tab => {
       tab.onclick = () => {
@@ -482,6 +488,10 @@ const Game = {
     document.getElementById('log-panel').classList.add('hidden');
     document.getElementById('decision-panel').classList.add('hidden');
     document.getElementById('day-summary').classList.add('hidden');
+    const conflictPanel = document.getElementById('crew-conflict-panel');
+    if (conflictPanel) conflictPanel.classList.add('hidden');
+    Game.crewConflict = { active: false };
+    Game.pendingDaySummary = null;
     const fishingPanel = document.getElementById('fishing-panel');
     if (fishingPanel) fishingPanel.classList.add('hidden');
     if (Game.fishing?.active) Game.cancelFishing(false);
@@ -500,13 +510,52 @@ const Game = {
     else if (Game.state === 'paused') Game.setState('playing');
   },
 
+  renderCrewPanel: () => {
+    GameUI.updateCrewOverview(Game);
+    CrewManager.renderList(
+      document.getElementById('crew-list'),
+      (member, action) => {
+        if (action === 'expel') {
+          Game.expelCrewMember(member);
+        } else {
+          Save.save(Game.getSaveData());
+        }
+        GameUI.updateCrewOverview(Game);
+        Game.renderCrewPanel();
+      }
+    );
+  },
+
+  expelCrewMember: (member) => {
+    if (!member?.alive || member.restrainedDays <= 0) return false;
+    const confirmed = typeof window.confirm !== 'function' ||
+      window.confirm(
+        `¿Expulsar a ${member.name}? Perderás moral y no podrá regresar.`
+      );
+    if (!confirmed) return false;
+    CrewManager.removeMesh(member);
+    const index = CrewManager.members.indexOf(member);
+    if (index >= 0) CrewManager.members.splice(index, 1);
+    Game.stats.abandoned++;
+    Game.player.morale = Math.max(0, Game.player.morale - 10);
+    for (const crewMember of CrewManager.members) {
+      if (crewMember.alive) {
+        crewMember.morale = Math.max(0, crewMember.morale - 5);
+        crewMember.trust = Math.max(0, crewMember.trust - 4);
+      }
+    }
+    Log.add(`Expulsaste a ${member.name} tras la crisis.`);
+    Save.save(Game.getSaveData());
+    return true;
+  },
+
   updateBuildMenu: () => {
     const menu = document.getElementById('build-menu');
     const list = document.getElementById('build-list');
     if (BuildManager.active) {
       Game.paused = true;
       menu.classList.remove('hidden');
-      const carpenter = CrewManager.members.some(m => m.alive && m.skill.effect === 'woodCost') ? -0.15 : 0;
+      const carpenter = CrewManager.getConstructionDiscount();
       BuildManager.renderMenu(list, Game.resources, carpenter);
       if (BuildManager.selected) BuildManager.renderInfo(document.getElementById('build-info'), BuildManager.selected, Game.resources, carpenter);
       else document.getElementById('build-info').innerHTML = 'Selecciona una estructura para colocarla en la balsa.';
@@ -531,7 +580,7 @@ const Game = {
 
     // Modo colocación
     if (BuildManager.placing && BuildManager.selected) {
-      const carpenter = CrewManager.members.some(m => m.alive && m.skill.effect === 'woodCost') ? -0.15 : 0;
+      const carpenter = CrewManager.getConstructionDiscount();
       const cost = BuildManager.realCost(BuildManager.selected, carpenter);
       if (!BuildManager.canAffordCustom(cost, Game.resources)) {
         Game.showFloatingText(w.x, w.z, 'Faltan recursos', '#ef5350');
@@ -647,7 +696,10 @@ const Game = {
     for (const [k, chanceOrAmount] of Object.entries(loot)) {
       if (k === 'survivor' || k === 'name' || k === 'icon') continue;
       if (typeof chanceOrAmount === 'number') {
-        const amount = Math.round(chanceOrAmount * gatherBonus * 100) / 100;
+        const scarcity = k === 'food' || k === 'water' ? 0.88 : 1;
+        const amount = Math.round(
+          chanceOrAmount * scarcity * gatherBonus * 100
+        ) / 100;
         if (amount > 0) {
           Game.resources[k] = (Game.resources[k] || 0) + amount;
           msg.push(`+${Util.formatAmount(amount, 2)} ${Util.resourceName(k)}`);
@@ -669,7 +721,7 @@ const Game = {
     const storyText = survivor.getStoryOfferText ? `\n\n${survivor.getStoryOfferText()}` : '';
     Game.showDecision(
       'Náufrago a la deriva',
-      `Has encontrado a ${survivor.name}.\nHabilidad: ${survivor.skill.name}. Rasgo: ${survivor.trait.name}.${storyText}\n\nRescatarlo añade su talento, pero también hasta 1 de comida y 1,3 de agua al consumo diario, además del desenlace de su historia.`,
+      `Has encontrado a ${survivor.name}.\nHabilidad: ${survivor.skill.name}. Rasgo: ${survivor.trait.name}. Tarea inicial: ${getCrewJob(survivor.job).name}.${storyText}\n\nRescatarlo añade su talento, pero también hasta 1 de comida y 1,3 de agua al consumo diario. La confianza, el estrés y la privación determinarán si colabora, estorba o entra en crisis.`,
       [
         { label: 'Rescatar', action: () => { Game.rescueSurvivor(survivor, obj); } },
         { label: 'Dar suministros', action: () => { Game.giveSupplies(survivor, obj); } },
@@ -695,7 +747,10 @@ const Game = {
     }
     CrewManager.assignPosition(survivor, Game.raft);
     Game.stats.rescued++;
-    Log.add(`Has rescatado a ${survivor.name} (${survivor.skill.name}).`);
+    Log.add(
+      `Has rescatado a ${survivor.name} (${survivor.skill.name}). ` +
+      `Tarea inicial: ${getCrewJob(survivor.job).name}.`
+    );
     Game.removeEntity(obj);
     Game.showFloatingText(obj.x, obj.z, `¡${survivor.name} rescatado!`);
     AudioSys.play('alert');
@@ -929,6 +984,172 @@ const Game = {
   },
 
   updateFishingUI: () => GameUI.updateFishingUI(Game),
+
+  startCrewConflict: (member, cause = 'delirio por privación') => {
+    if (!member?.alive || Game.crewConflict?.active) return false;
+    const guard = CrewManager.conflictSupport(member);
+    const vulnerableCrew = CrewManager.members
+      .filter(candidate => candidate.alive && candidate !== member)
+      .sort((a, b) => a.health - b.health);
+    const target = vulnerableCrew.length > 0 && member.criticalDays % 2 === 0
+      ? vulnerableCrew[0]
+      : Game.player;
+    Game.crewConflict = {
+      active: true,
+      member,
+      target,
+      cause,
+      tension: Util.clamp(62 - guard * 24, 42, 72),
+      timeLeft: 9,
+      pushCooldown: 0,
+      feedback:
+        guard > 0.1
+          ? 'La guardia contiene parte del ataque. Pulsa E para ayudar.'
+          : 'Usa una ración para calmarlo o pulsa E para empujarlo.'
+    };
+    Game.paused = true;
+    const panel = document.getElementById('crew-conflict-panel');
+    if (panel) panel.classList.remove('hidden');
+    AudioSys.play('conflict-warning');
+    Game.showEventMessage(`¡${member.name} se ha vuelto hostil!`);
+    GameUI.updateCrewConflictUI(Game);
+    return true;
+  },
+
+  updateCrewConflict: (dt) => {
+    const conflict = Game.crewConflict;
+    if (!conflict?.active) return;
+    const safeDt = Math.max(0, Math.min(dt || 0, 0.1));
+    conflict.timeLeft = Math.max(0, conflict.timeLeft - safeDt);
+    conflict.pushCooldown = Math.max(0, conflict.pushCooldown - safeDt);
+    conflict.tension = Math.min(100, conflict.tension + safeDt * 4.2);
+    if (conflict.timeLeft <= 0 || conflict.tension >= 100) {
+      Game.finishCrewConflict('failed');
+      return;
+    }
+    GameUI.updateCrewConflictUI(Game);
+  },
+
+  requestCrewConflictPush: () => {
+    const conflict = Game.crewConflict;
+    if (!conflict?.active || conflict.pushCooldown > 0 ||
+        Game.player.stamina < 8) return false;
+    const energyBefore = Game.player.stamina;
+    Game.player.stamina = Math.max(0, Game.player.stamina - 14);
+    const guardAssist = CrewManager.conflictSupport(conflict.member) * 8;
+    const force = 13 + energyBefore * 0.055 + guardAssist;
+    conflict.tension = Math.max(0, conflict.tension - force);
+    conflict.pushCooldown = 0.38;
+    conflict.member.health = Math.max(1, conflict.member.health - 3);
+    conflict.feedback =
+      conflict.tension <= 0
+        ? 'Has conseguido reducirlo sin matarlo.'
+        : `Resiste. Peligro restante: ${Math.ceil(conflict.tension)}%.`;
+    AudioSys.play('conflict-shove');
+    if (conflict.tension <= 0) {
+      Game.finishCrewConflict('restrained');
+      return true;
+    }
+    GameUI.updateCrewConflictUI(Game);
+    return true;
+  },
+
+  requestCrewConflictRation: () => {
+    const conflict = Game.crewConflict;
+    if (!conflict?.active || Game.resources.food < 0.5 ||
+        Game.resources.water < 0.65) return false;
+    Game.resources.food -= 0.5;
+    Game.resources.water -= 0.65;
+    const member = conflict.member;
+    member.hunger = Util.clamp(member.hunger + 18, 0, 100);
+    member.thirst = Util.clamp(member.thirst + 24, 0, 100);
+    member.stress = Math.max(0, member.stress - 38);
+    member.trust = Util.clamp(member.trust + 8, 0, 100);
+    member.criticalDays = Math.max(0, member.criticalDays - 1);
+    member.hallucinating = false;
+    member.lastIncident = 'El grupo compartió una ración durante su crisis.';
+    AudioSys.play('conflict-calm');
+    Game.finishCrewConflict('calmed');
+    return true;
+  },
+
+  finishCrewConflict: (outcome) => {
+    const conflict = Game.crewConflict;
+    if (!conflict?.active) return false;
+    const member = conflict.member;
+    let note;
+    if (outcome === 'calmed') {
+      member.hostile = false;
+      note = `${member.name} recuperó el control tras recibir una ración.`;
+    } else if (outcome === 'restrained') {
+      member.hostile = false;
+      member.restrainedDays = 1;
+      member.stress = Math.max(38, member.stress - 22);
+      member.trust = Math.max(0, member.trust - 10);
+      member.morale = Math.max(0, member.morale - 6);
+      member.lastIncident = 'Fue reducido durante una crisis y descansará un día.';
+      note = `${member.name} fue reducido sin sufrir heridas graves.`;
+    } else {
+      member.hostile = false;
+      member.restrainedDays = 1;
+      member.trust = Math.max(0, member.trust - 14);
+      member.stress = Math.max(45, member.stress - 12);
+      const target = conflict.target || Game.player;
+      const targetsPlayer = target === Game.player;
+      const damage = targetsPlayer ? 34 : 55;
+      target.health = Math.max(0, target.health - damage);
+      if (targetsPlayer) {
+        if (Game.player.health <= 0) {
+          Game.stats.deathCause =
+            `${member.name} mató al personaje durante una crisis a bordo`;
+        }
+        Game.player.morale = Math.max(0, Game.player.morale - 10);
+      } else {
+        Game.player.morale = Math.max(0, Game.player.morale - 12);
+        if (target.health <= 0) {
+          target.alive = false;
+          target.deathLogged = true;
+          CrewManager.removeMesh(target);
+        }
+      }
+      const stolenFood = Math.min(Game.resources.food, 0.35);
+      const stolenWater = Math.min(Game.resources.water, 0.5);
+      Game.resources.food -= stolenFood;
+      Game.resources.water -= stolenWater;
+      const targetName = targetsPlayer ? 'al personaje principal' : `a ${target.name}`;
+      member.lastIncident =
+        `Hirió ${targetName} antes de que pudieran reducirlo.`;
+      note = target.health <= 0 && !targetsPlayer
+        ? `${member.name} mató a ${target.name} antes de ser reducido.`
+        : `${member.name} hirió ${targetName} (-${damage} salud) antes de ser reducido.`;
+      AudioSys.play('damage');
+    }
+
+    Log.add(note);
+    const panel = document.getElementById('crew-conflict-panel');
+    if (panel) panel.classList.add('hidden');
+    Game.crewConflict = { active: false };
+    Game.paused = false;
+    Game.checkWinLose();
+    if (Game.state !== 'playing') {
+      Game.pendingDaySummary = null;
+      return true;
+    }
+    Game.showEventMessage(note);
+    const summary = Game.pendingDaySummary;
+    Game.pendingDaySummary = null;
+    Save.save(Game.getSaveData());
+    if (summary) {
+      summary.crewNotes.push(note);
+      Game.showDaySummary(
+        summary.food,
+        summary.water,
+        summary.events,
+        summary.crewNotes
+      );
+    }
+    return true;
+  },
 
   showDecision: (title, text, options) => {
     Game.paused = true;
@@ -1340,6 +1561,9 @@ const Game = {
 
   getDailyNeeds: () => GameSimulation.getDailyNeeds(Game),
 
+  resolveUnstoredSpoilage: () =>
+    GameSimulation.resolveUnstoredSpoilage(Game),
+
   resolveDailySupplies: () => GameSimulation.resolveDailySupplies(Game),
 
   getNavigationState: () => GameSimulation.getNavigationState(Game),
@@ -1494,6 +1718,11 @@ const Game = {
     const crewNotes = [...storyNotes, ...workNotes];
     for (const note of storyNotes) Log.add(note);
     if (workNotes.length) Log.add(`Trabajo de la tripulación: ${workNotes.join(' ')}`);
+    const spoilageNote = Game.resolveUnstoredSpoilage();
+    if (spoilageNote) {
+      crewNotes.push(spoilageNote);
+      Log.add(spoilageNote);
+    }
 
     const supplyReport = Game.resolveDailySupplies();
     const foodConsumed = supplyReport.foodConsumed;
@@ -1503,6 +1732,12 @@ const Game = {
       Game.triggerLose();
       return;
     }
+    const behaviorReport = CrewManager.resolveDailyBehavior
+      ? CrewManager.resolveDailyBehavior(Game)
+      : { messages: [], conflict: null };
+    crewNotes.push(...behaviorReport.messages);
+    for (const note of behaviorReport.messages) Log.add(note);
+    Game.reportDetachedModules();
 
     const heal = Game.raft.countProvides('heal');
     if (heal > 0) Game.player.health = Math.min(100, Game.player.health + heal);
@@ -1546,6 +1781,19 @@ const Game = {
     }
 
     Game.updateObjective();
+    if (behaviorReport.conflict) {
+      Game.pendingDaySummary = {
+        food: foodConsumed,
+        water: waterConsumed,
+        events,
+        crewNotes: [...crewNotes]
+      };
+      Game.startCrewConflict(
+        behaviorReport.conflict.member,
+        behaviorReport.conflict.cause
+      );
+      return;
+    }
     Save.save(Game.getSaveData());
     Game.showDaySummary(foodConsumed, waterConsumed, events, crewNotes);
   },
@@ -1595,8 +1843,18 @@ const Game = {
         Log.add('Alguien ha enfermado por el agua.');
         break;
       case 'argument':
-        Game.player.morale -= 12;
-        Log.add('Discusión entre supervivientes.');
+        Game.player.morale -= 8;
+        if (CrewManager.count() > 0) {
+          const instigator = CrewManager.members
+            .filter(member => member.alive)
+            .sort((a, b) => b.stress - a.stress)[0];
+          instigator.stress = Util.clamp(instigator.stress + 8, 0, 100);
+          instigator.trust = Util.clamp(instigator.trust - 3, 0, 100);
+          instigator.lastIncident = 'Protagonizó una discusión a bordo.';
+          Log.add(`${instigator.name} protagonizó una discusión.`);
+        } else {
+          Log.add('La tensión del aislamiento resulta insoportable.');
+        }
         break;
       case 'lost':
         if (CrewManager.count() > 0 && Math.random() < 0.3) {
@@ -1614,7 +1872,8 @@ const Game = {
         break;
       case 'gift': {
         const res = Util.choice(['wood', 'food', 'water', 'rope']);
-        Game.resources[res] += 2;
+        Game.resources[res] +=
+          res === 'food' || res === 'water' ? 1.5 : 2;
         Log.add(`Encontraste ${Util.resourceName(res)} flotando cerca.`);
         break;
       }

@@ -232,3 +232,22 @@ renderizado tienen módulos propios con adaptadores compatibles.
   inevitable decidido al azar.
 - Pruebas de regresión para telegráficos, esquiva, ataque, defensa con gancho,
   colisiones de coral y componentes de la nueva interfaz.
+
+## Revisión jugable — v1.8
+
+- Tareas configurables para cada tripulante: pesca, agua, recuperación,
+  reparación, cuidados, navegación, guardia, cocina y descanso.
+- Eficiencia laboral dependiente de salud, hambre, sed, confianza, estrés,
+  personalidad y afinidad entre tarea y especialidad.
+- Confianza, estrés, privación, incidentes y estados visibles de cada NPC.
+- Colaboraciones espontáneas, errores, discusiones, pequeños robos y daños
+  contextuales con enfriamientos para evitar cadenas arbitrarias.
+- Alucinaciones telegrafiadas tras varios días críticos sin comida o agua.
+- Crisis hostiles con confrontación propia: racionar, defenderse con energía,
+  recibir ayuda de la guardia, reducir al agresor, resultar herido o morir.
+- Posibilidad de expulsar a un tripulante reducido, con coste moral y social.
+- Reservas expresadas en días para anticipar la escasez y reducción moderada
+  del alimento y agua encontrados en restos comunes.
+- Nuevas variables persistentes y saneadas en guardados antiguos o corruptos.
+- Regresiones para tareas, contribuciones, estorbos, privación, hostilidad,
+  confrontaciones y muerte durante una crisis.
