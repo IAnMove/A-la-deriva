@@ -1,0 +1,45 @@
+{
+  "schemaVersion": "1.0",
+  "id": "aladeriva",
+  "slug": "aladeriva",
+  "name": "A LA DERIVA 3D",
+  "shortDescription": "Naufraga en alta mar y sobrevive a la balsa: tormentas, tiburones e islas.",
+  "description": "Un survival en 3D a la deriva: gestiona agua y comida, pesca, afronta tormentas y eventos diarios (tiburones, buques fantasma, motines) y busca tierra firme antes de que el mar te gane.",
+  "type": "game",
+  "genre": "survival 3D",
+  "tags": ["3d", "supervivencia", "naufragio", "balsa"],
+  "version": "1.0.0",
+  "status": "published",
+  "featured": true,
+  "path": "/aladeriva/contenido/",
+  "entry": "index.html",
+  "accent": "#2f7fc9",
+  "screenshots": [
+    {"src": "./screenshots/gameplay.webp", "alt": "Náufrago sobre su balsa rodeado por el océano y la interfaz de supervivencia"},
+    {"src": "./screenshots/menu.webp", "alt": "Pantalla inicial y manual de supervivencia de A la Deriva 3D"}
+  ],
+  "art": [
+    "   ~ ~ ~ ~ ~ ~ ~ ~ ~ ~   ",
+    " ~                      ~ ",
+    "~    🦈        🦈         ~",
+    "~      ,___________,      ~",
+    "~     |  ⛵  🧍  🪣  |      ~",
+    "~      ~~~~~~~~~~~       ~",
+    " ~   ~ ~ ~ ~ ~ ~ ~ ~ ~  ~ ",
+    "   ~  ~  ~  ~  ~  ~  ~  "
+  ],
+  "controls": [
+    {"key": "WASD / flechas", "action": "Moverse por la balsa"},
+    {"key": "E", "action": "Usar / interactuar"},
+    {"key": "Space", "action": "Pescar"},
+    {"key": "Q / R", "action": "Girar cámara"},
+    {"key": "+ / −", "action": "Zoom de cámara"},
+    {"key": "P / Esc", "action": "Pausa"},
+    {"key": "M", "action": "Silenciar"}
+  ],
+  "features": [
+    "Ciclo día/noche con tormentas, lluvia, niebla y calor",
+    "Eventos diarios: tiburones, buque fantasma, motín, ballena",
+    "Pesca, gestión de agua y comida, búsqueda de islas"
+  ]
+}
