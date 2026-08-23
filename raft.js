@@ -579,6 +579,32 @@ class Raft {
     return false;
   }
 
+  // Crecimiento por anillos cuadrados alrededor de la celda origen (0,0),
+  // para que la balsa no salga en forma de "palo". Una celda de borde solo
+  // se puede construir cuando el lateral del anillo anterior que la
+  // respalda está completo; una esquina exige las dos celdas de borde
+  // adyacentes de su propio anillo. Solo limita construir: la carga de
+  // partidas y placeAt directo no pasan por aquí.
+  canExpandTo(gx, gy) {
+    if (!this.isConnected(gx, gy)) return false;
+    const ax = Math.abs(gx);
+    const ay = Math.abs(gy);
+    const ring = Math.max(ax, ay);
+    if (ring === 0) return true;
+    if (ax === ay) {
+      // Esquina del anillo: necesita los dos bordes adyacentes de ese anillo.
+      return this.has(gx - Math.sign(gx), gy) && this.has(gx, gy - Math.sign(gy));
+    }
+    // Celda de borde: exige completo el lateral del anillo anterior.
+    const inner = ring - 1;
+    for (let i = -inner; i <= inner; i++) {
+      const cx = ay > ax ? i : Math.sign(gx) * inner;
+      const cy = ay > ax ? Math.sign(gy) * inner : i;
+      if (!this.has(cx, cy)) return false;
+    }
+    return true;
+  }
+
   getBounds() {
     if (this.grid.size === 0) return { minX: 0, maxX: 0, minY: 0, maxY: 0 };
     const keys = this.grid.keys();

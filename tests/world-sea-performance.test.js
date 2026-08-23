@@ -77,8 +77,8 @@ function run(code) {
   return vm.runInContext(code, sandbox);
 }
 
-assert.equal(run('World.SEA_SEGMENTS'), 64);
-assert.equal((run('World.SEA_SEGMENTS') + 1) ** 2, 4225);
+assert.equal(run('World.SEA_SEGMENTS'), 128);
+assert.equal((run('World.SEA_SEGMENTS') + 1) ** 2, 16641);
 
 run(`
   var seaPositionWrites = 0;

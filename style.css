@@ -60,6 +60,32 @@ html, body {
   opacity: 0;
 }
 #fx-heat { background: rgba(255, 160, 0, 0.10); transition: opacity 0.8s; }
+
+/* Mira de primera persona: anillo y punto centrados, sin capturar clics */
+#fp-crosshair {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  transform: translate(-50%, -50%);
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  border-radius: 50%;
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.65);
+  pointer-events: none;
+  z-index: 60;
+}
+#fp-crosshair::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 3px;
+  height: 3px;
+  transform: translate(-50%, -50%);
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 50%;
+}
 #fx-hallucination {
   background: radial-gradient(circle at center, rgba(140, 60, 200, 0.25), rgba(40, 10, 80, 0.45));
   transition: opacity 1.2s;
@@ -594,6 +620,23 @@ button.danger { background: linear-gradient(180deg, #ff7043, #d84315); color: #f
 #fishing-track.success {
   border-color: var(--success);
   box-shadow: 0 0 22px rgba(102, 187, 106, 0.42);
+}
+
+/* Pesca en primera persona: el panel se compacta abajo y deja de tapar el
+   mar (sin fondo oscuro ni desenfoque) para ver la caña, la boya y el pez. */
+#fishing-panel.fishing-fp {
+  background: none;
+  backdrop-filter: none;
+  align-items: flex-end;
+  /* El lienzo sigue recibiendo clics (pointer lock, recoger sedal). */
+  pointer-events: none;
+}
+#fishing-panel.fishing-fp .fishing-content {
+  pointer-events: auto;
+  margin-bottom: 14px;
+  max-width: 520px;
+  background:
+    linear-gradient(145deg, rgba(18, 48, 68, 0.88), rgba(6, 21, 34, 0.92));
 }
 
 #fishing-panel.failure .fishing-content,

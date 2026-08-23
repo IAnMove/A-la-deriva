@@ -565,9 +565,16 @@ const CrewManager = {
       if (m.mesh.parent) m.mesh.parent.remove(m.mesh);
       // Las figuras de tripulación usan materiales compartidos (MatLib), pero
       // sus geometrías eran únicas y quedaban vivas tras morir/cargar partida.
-      m.mesh.traverse(o => {
-        if (o.geometry && o.geometry.dispose) o.geometry.dispose();
-      });
+      // Los clones GLB comparten geometría con la biblioteca: no se disponen.
+      const shared = m.mesh.userData.glbCrew;
+      if (m.mesh.userData.glbRig) {
+        m.mesh.userData.glbRig.mixer.stopAllAction();
+      }
+      if (!shared) {
+        m.mesh.traverse(o => {
+          if (o.geometry && o.geometry.dispose) o.geometry.dispose();
+        });
+      }
     }
     m.mesh = null;
   },
@@ -618,7 +625,13 @@ const CrewManager = {
     for (const m of CrewManager.members) {
       if (!m.alive || m.gx == null) continue;
       if (!m.mesh) {
-        m.mesh = makeHumanoidMesh(0xd84315, { hair: Util.choice([0x4e342e, 0x212121, 0x8d6e63, 0x6d4c41, 0x5d4037]) });
+        // Si la biblioteca de náufragos GLB está cargada, el miembro es un
+        // clon animado; si no, se usa el humanoide de cajas de siempre.
+        const glbMesh =
+          typeof NaufragoGLB !== 'undefined' && NaufragoGLB.createCrewMember
+            ? NaufragoGLB.createCrewMember(CrewManager.members.indexOf(m))
+            : null;
+        m.mesh = glbMesh || makeHumanoidMesh(0xd84315, { hair: Util.choice([0x4e342e, 0x212121, 0x8d6e63, 0x6d4c41, 0x5d4037]) });
         raft.group.add(m.mesh);
         m.mesh.userData.phase = Math.random() * Math.PI * 2;
       }
@@ -634,6 +647,15 @@ const CrewManager = {
         0.35 + Math.abs(sway),
         (m.gy + 0.5) * cs + offset.z
       );
+      const glbRig = m.mesh.userData.glbRig;
+      if (glbRig) {
+        const nowMs = performance.now();
+        const lastMs = m.mesh.userData.glbLast || nowMs;
+        m.mesh.userData.glbLast = nowMs;
+        // Los hostiles se agitan con el clip de tirar del sedal.
+        glbRig.play(m.hostile ? 'Reel' : 'Idle', m.hostile ? { timeScale: 1.3 } : undefined);
+        glbRig.update(Math.min(0.1, (nowMs - lastMs) / 1000));
+      }
       const parts = m.mesh.userData.parts;
       if (m.hostile && parts) {
         parts.armL.rotation.x = -1.1 + Math.sin(performance.now() / 95) * 0.22;

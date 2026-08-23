@@ -825,6 +825,10 @@ const Game = {
         Game.showFloatingText(w.x, w.z, 'No conectado', '#ef5350');
         return;
       }
+      if (!Game.raft.canExpandTo(gx, gy)) {
+        Game.showFloatingText(w.x, w.z, 'Completa el lateral actual primero', '#ef5350');
+        return;
+      }
       BuildManager.payCost(cost, Game.resources);
       Game.raft.placeAt(gx, gy, BuildManager.selected, true, CrewManager.getDurabilityBonus());
       AudioSys.play('build');
@@ -1053,6 +1057,21 @@ const Game = {
     hook.returning = false;
     Game.paused = true;
 
+    // Vista de pesca: primera persona apuntando a la boya. Si ya estábamos
+    // en primera persona solo se encuadra; al terminar se restaura.
+    if (typeof World !== 'undefined' && World.enterFirstPerson &&
+        World.findPlayerObject && World.findPlayerObject()) {
+      if (!World.firstPerson) {
+        World.enterFirstPerson();
+        Game.fishing.autoFp = true;
+      }
+      World.fpYaw = Math.atan2(
+        hook.x - Game.player.x,
+        hook.z - Game.player.z
+      );
+      World.fpPitch = -0.42;
+    }
+
     const panel = document.getElementById('fishing-panel');
     if (panel) {
       panel.classList.remove('hidden', 'success', 'failure');
@@ -1092,6 +1111,15 @@ const Game = {
       return;
     }
     if (Input.wasPressed('Space')) fishing.pullRequested = true;
+
+    // En primera persona el panel se compacta para no tapar la vista.
+    const fpPanel = document.getElementById('fishing-panel');
+    if (fpPanel?.classList) {
+      fpPanel.classList.toggle(
+        'fishing-fp',
+        typeof World !== 'undefined' && !!World.firstPerson
+      );
+    }
 
     fishing.timeLeft = Math.max(0, fishing.timeLeft - safeDt);
     fishing.cooldown = Math.max(0, fishing.cooldown - safeDt);
@@ -1196,10 +1224,15 @@ const Game = {
     const panel = document.getElementById('fishing-panel');
     if (panel) {
       panel.classList.add('hidden');
-      panel.classList.remove('success', 'failure');
+      panel.classList.remove('success', 'failure', 'fishing-fp');
     }
     const track = document.getElementById('fishing-track');
     if (track) track.classList.remove('success', 'failure');
+    // Salir de la vista de pesca solo si la puso el juego.
+    if (fishing.autoFp && typeof World !== 'undefined' &&
+        World.exitFirstPerson) {
+      World.exitFirstPerson();
+    }
     Game.fishing = { active: false };
     Game.paused = false;
     if (announce && message) Game.showEventMessage(message);
@@ -1210,6 +1243,7 @@ const Game = {
     if (!Game.fishing?.active) {
       const panel = document.getElementById('fishing-panel');
       if (panel) panel.classList.add('hidden');
+      if (panel) panel.classList.remove('fishing-fp');
       const track = document.getElementById('fishing-track');
       if (track) track.classList.remove('success', 'failure');
       return false;

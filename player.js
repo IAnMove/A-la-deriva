@@ -21,6 +21,10 @@ const PlayerVis = {
   tugTime: 0,
   tugSuccess: true,
   pose: 'idle',
+  glbRig: null,
+
+  // Ajuste de posición de la caña respecto al hueso RightHand del rig GLB.
+  rodGripOffset: null,
 
   ease: t => {
     const safe = Math.max(0, Math.min(1, t));
@@ -170,6 +174,174 @@ const PlayerVis = {
     PlayerVis.aimLine.visible = false;
     raftGroup.add(PlayerVis.aimLine);
     PlayerVis.reset();
+
+    // Si el náufrago generado (Meshy GLB) está disponible, sustituye al
+    // humanoide de cajas. El procedural queda como reserva y para los tests.
+    if (typeof NaufragoGLB !== 'undefined' && NaufragoGLB.load) {
+      NaufragoGLB.load().then(gltf => {
+        if (gltf) PlayerVis.adoptGlb(gltf);
+      });
+      // La biblioteca de la tripulación carga en segundo plano.
+      if (NaufragoGLB.loadCrew) NaufragoGLB.loadCrew();
+    }
+  },
+
+  adoptGlb: gltf => {
+    const group = gltf.scene || (gltf.scenes && gltf.scenes[0]);
+    if (!group || !PlayerVis.mesh) return;
+    group.name = 'player-glb';
+    const bounds = new THREE.Box3().setFromObject(group);
+    const height = Math.max(0.01, bounds.max.y - bounds.min.y);
+    const scale = 1.24 / height; // misma altura que el humanoide de cajas
+    group.scale.setScalar(scale);
+    group.position.y = -bounds.min.y * scale;
+    group.traverse(obj => {
+      if (obj.isMesh || obj.isSkinnedMesh) {
+        obj.castShadow = true;
+        obj.frustumCulled = false;
+      }
+    });
+    PlayerVis.mesh.add(group);
+    PlayerVis.mesh.children.forEach(child => {
+      if (child !== group) child.visible = false;
+    });
+
+    PlayerVis.glbRig = NaufragoGLB.createRig(group, gltf.animations || []);
+    PlayerVis.glbRig.play('Idle');
+    PlayerVis.rodGripOffset = new THREE.Vector3(0, -0.02, 0.03);
+
+    // La caña deja el brazo procedural y pasa a seguir el hueso de la mano.
+    if (PlayerVis.rod && PlayerVis.rod.parent) {
+      PlayerVis.rod.parent.remove(PlayerVis.rod);
+      PlayerVis.mesh.add(PlayerVis.rod);
+    }
+  },
+
+  syncGlb: (p, dt, time, moving, casting) => {
+    const rig = PlayerVis.glbRig;
+    const rowing = (p.rowAnim || 0) > 0;
+    const tug = PlayerVis.tugTime > 0;
+
+    if (rowing) {
+      PlayerVis.pose = 'rowing';
+      rig.play('Crouch', { timeScale: 0.5 });
+    } else if (casting) {
+      PlayerVis.pose = 'cast';
+      const clip = rig.actions.Cast ? rig.actions.Cast.getClip() : null;
+      rig.play('Cast', {
+        once: true,
+        timeScale: clip ? clip.duration / PlayerVis.castDuration : 1
+      });
+    } else if (p.hook?.fishing) {
+      PlayerVis.pose = tug
+        ? (PlayerVis.tugSuccess ? 'fishing-pull' : 'fishing-slip')
+        : 'fishing-tension';
+      rig.play('Reel', { timeScale: tug ? 1.8 : 0.9 });
+    } else if (p.hook?.returning) {
+      PlayerVis.pose = 'reeling';
+      rig.play('Reel', { timeScale: 1.5 });
+    } else if (p.hook) {
+      PlayerVis.pose = 'line-out';
+      rig.play('Idle');
+    } else if (moving) {
+      PlayerVis.pose = 'walking';
+      rig.play('Walk');
+    } else {
+      PlayerVis.pose = 'idle';
+      rig.play('Idle');
+    }
+    rig.update(dt);
+
+    // En primera persona la cabeza queda oculta; el mezclador puede
+    // sobrescribir la escala del hueso, así que se reaplica cada frame.
+    if (PlayerVis.fpMode) {
+      const head = rig.bone('Head');
+      if (head) head.scale.setScalar(0.0001);
+    }
+
+    if (rowing) {
+      // Remar con la mano: sobre la base agachada, el brazo derecho palea.
+      const swing = Math.sin(time * 8);
+      const arm = rig.bone('RightArm');
+      const forearm = rig.bone('RightForeArm');
+      if (arm) arm.rotation.x += swing * 0.55;
+      if (forearm) forearm.rotation.x += swing * 0.35 - 0.25;
+    }
+
+    if (p.hook && (p.hook.fishing || p.hook.returning)) {
+      if (PlayerVis.reel) PlayerVis.reel.rotation.x += dt * 18;
+      if (PlayerVis.reelCrank) PlayerVis.reelCrank.rotation.x += dt * 18;
+    }
+
+    // Caña como viewmodel: en primera persona con el sedal fuera, la caña se
+    // cuelga de la cámara (abajo a la derecha, punta al frente) con balanceo,
+    // tensión del pez y sacudida al tirar. Al volver a tercera persona se
+    // devuelve a la malla y la mano la recoloca.
+    const rod = PlayerVis.rod;
+    const fpRod = rod && rod.visible && p.hook &&
+      typeof World !== 'undefined' && World.firstPerson && World.camera;
+    if (fpRod) {
+      if (rod.parent !== World.camera) World.camera.add(rod);
+      const tugLift = PlayerVis.tugTime > 0 ? PlayerVis.tugTime / 0.38 : 0;
+      const swayY = Math.sin(time * 1.6) * 0.012;
+      const swayX = Math.cos(time * 1.15) * 0.01;
+      // Más pequeña que en mano y apuntando al centro, donde cae la boya.
+      rod.scale.setScalar(0.6);
+      rod.position.set(0.36 + swayX, -0.38 + swayY + tugLift * 0.08, -0.55);
+      if (!PlayerVis.rodViewDir) {
+        PlayerVis.rodViewDir = new THREE.Vector3();
+        PlayerVis.rodViewAxis = new THREE.Vector3(0, -1, 0);
+      }
+      const viewDir = PlayerVis.rodViewDir
+        .set(-0.38, 0.5 + tugLift * 0.45, -1)
+        .normalize();
+      rod.quaternion.setFromUnitVectors(PlayerVis.rodViewAxis, viewDir);
+      const struggle = p.hook.fishing
+        ? 0.3 + Math.sin(time * 5.2) * 0.18 + Math.sin(time * 9.1) * 0.12
+        : 0.12;
+      PlayerVis.setRodFlex(struggle + tugLift * 0.55);
+    } else {
+      if (rod && typeof World !== 'undefined' && World.camera &&
+          rod.parent === World.camera) {
+        PlayerVis.mesh.add(rod);
+        rod.scale.setScalar(1);
+        PlayerVis.setRodFlex(0);
+      }
+
+      // La caña sigue la posición de la mano, pero su orientación se decide
+      // aquí: la punta (-Y local) apunta al anzuelo u objetivo de lance.
+      // Copiar el quaternion del hueso dejaba la caña en ángulos imposibles.
+      const hand = rig.bone('RightHand');
+      if (hand && PlayerVis.rod) {
+        PlayerVis.mesh.updateMatrixWorld(true);
+        const handPos = hand.getWorldPosition(new THREE.Vector3());
+        PlayerVis.rod.position.copy(PlayerVis.mesh.worldToLocal(handPos));
+        if (PlayerVis.rodGripOffset) {
+          PlayerVis.rod.position.add(PlayerVis.rodGripOffset);
+        }
+
+        const target = p.hook || PlayerVis.castTarget;
+        let dirLocal;
+        if (target) {
+          // Dirección mundo de la mano al agua, llevada al espacio de la malla.
+          const targetWorld = new THREE.Vector3(target.x, 0.3, target.z);
+          if (PlayerVis.mesh.parent) {
+            PlayerVis.mesh.parent.localToWorld(targetWorld);
+          }
+          const dirWorld = targetWorld.sub(handPos).normalize();
+          const invQuat = PlayerVis.mesh
+            .getWorldQuaternion(new THREE.Quaternion())
+            .invert();
+          dirLocal = dirWorld.applyQuaternion(invQuat);
+        } else {
+          dirLocal = new THREE.Vector3(0, -0.3, 1); // descanso: adelante y caída
+        }
+        PlayerVis.rod.quaternion.setFromUnitVectors(
+          new THREE.Vector3(0, -1, 0),
+          dirLocal
+        );
+      }
+    }
   },
 
   reset: () => {
@@ -180,6 +352,7 @@ const PlayerVis = {
     PlayerVis.tugTime = 0;
     PlayerVis.tugSuccess = true;
     PlayerVis.pose = 'idle';
+    if (PlayerVis.glbRig) PlayerVis.glbRig.play('Idle');
     if (PlayerVis.rod) PlayerVis.rod.visible = false;
     if (PlayerVis.mesh) PlayerVis.mesh.position.set(1, 0.35, 1);
     if (PlayerVis.aimLine) PlayerVis.aimLine.visible = false;
@@ -196,6 +369,45 @@ const PlayerVis = {
   pulseTug: success => {
     PlayerVis.tugTime = 0.38;
     PlayerVis.tugSuccess = success !== false;
+  },
+
+  // El GLB de Meshy llega en DoubleSide: en FP el near plane recortaría el
+  // chaleco y se vería el interior naranja. FrontSide deja las piernas/cubierta.
+  setGlbFrontSide: active => {
+    if (typeof THREE === 'undefined') return;
+    const root = PlayerVis.mesh && PlayerVis.mesh.getObjectByName('player-glb');
+    if (!root) return;
+    root.traverse(obj => {
+      if (!obj.isMesh && !obj.isSkinnedMesh) return;
+      const mats = [].concat(obj.material || []);
+      mats.forEach(mat => {
+        if (!mat) return;
+        if (mat.userData._fpSide == null) mat.userData._fpSide = mat.side;
+        mat.side = active ? THREE.FrontSide : mat.userData._fpSide;
+        mat.needsUpdate = true;
+      });
+    });
+  },
+
+  // Primera persona: se ve el cuerpo pero no la cabeza (escala mínima en el
+  // hueso; el mezclador puede sobrescribirla y syncGlb la reaplica). Devuelve
+  // false si no hay nada que ocultar y el llamador debe esconder la malla.
+  setFirstPerson: active => {
+    PlayerVis.fpMode = active;
+    PlayerVis.setGlbFrontSide(active);
+    if (PlayerVis.glbRig) {
+      const head = PlayerVis.glbRig.bone('Head');
+      if (head) {
+        head.scale.setScalar(active ? 0.0001 : 1);
+        return true;
+      }
+    }
+    const parts = PlayerVis.mesh && PlayerVis.mesh.userData.parts;
+    if (parts && parts.head) {
+      parts.head.visible = !active;
+      return true;
+    }
+    return false;
   },
 
   getRodTipWorld: out => {
@@ -339,7 +551,12 @@ const PlayerVis = {
     m.rotation.x = 0;
     m.rotation.z = 0;
 
-    if (p.hook) {
+    if (PlayerVis.fpMode && !p.hook &&
+        typeof World !== 'undefined' && World.firstPerson) {
+      // En primera persona el cuerpo acompaña la vista: al mirar abajo se
+      // ve el torso y las piernas donde deben estar.
+      m.rotation.y = World.fpYaw;
+    } else if (p.hook) {
       const aimX = p.hook.x - p.x;
       const aimZ = p.hook.z - p.z;
       if (Math.hypot(aimX, aimZ) > 0.05) m.rotation.y = Math.atan2(aimX, aimZ);
@@ -349,6 +566,14 @@ const PlayerVis = {
 
     const casting = !!p.hook && PlayerVis.castTime < PlayerVis.castDuration;
     if (PlayerVis.rod) PlayerVis.rod.visible = !!p.hook || casting;
+
+    // Con el GLB activo los clips del esqueleto sustituyen a las poses por
+    // articulaciones; el resto de la lógica de arriba (posición, giro, caña)
+    // sigue siendo la misma.
+    if (PlayerVis.glbRig) {
+      PlayerVis.syncGlb(p, safeDt, visualTime, moving, casting);
+      return;
+    }
 
     if ((p.rowAnim || 0) > 0) {
       PlayerVis.pose = 'rowing';

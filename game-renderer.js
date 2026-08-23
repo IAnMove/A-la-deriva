@@ -70,6 +70,9 @@ const GameRenderer = {
           rowMesh.position.set((gx + 0.5) * cs, 0.05, (gy + 0.5) * cs);
           game.rowGroup.add(rowMesh);
 
+          // La marca de "construible" solo aparece si la regla de anillos
+          // deja edificar ahí; la de remo vale con estar conectado.
+          if (!game.raft.canExpandTo(gx, gy)) continue;
           const validMesh = new THREE.Mesh(
             GameRenderer.validGeometry,
             GameRenderer.validMaterial
@@ -93,7 +96,7 @@ const GameRenderer = {
       );
       if (placing) {
         game.ghostMesh.visible = true;
-        const valid = !game.raft.has(gx, gy) && game.raft.isConnected(gx, gy);
+        const valid = !game.raft.has(gx, gy) && game.raft.canExpandTo(gx, gy);
         game.ghostMesh.material.color.setHex(valid ? 0x66bb6a : 0xef5350);
         game.ghostMesh.position.set(
           (gx + 0.5) * cs,
@@ -128,6 +131,11 @@ const GameRenderer = {
     game.elapsed += worldDt;
     GameRenderer.visualElapsed += dt;
     const worldTime = game.elapsed;
+    // Durante la pesca la simulación está pausada, pero la vista en primera
+    // persona necesita el mar vivo: olas y balanceo usan el reloj visual.
+    const seaTime = game.fishing?.active
+      ? GameRenderer.visualElapsed
+      : worldTime;
     const characterTime = game.fishing?.active
       ? GameRenderer.visualElapsed
       : worldTime;
@@ -138,23 +146,23 @@ const GameRenderer = {
       const wave = World.waveHeight(
         center.x,
         center.z,
-        worldTime,
+        seaTime,
         game.worldOffset,
         game.worldOffsetZ
       );
       game.raft.group.position.y = wave * World.waveAmp * 0.6;
       const rockMultiplier = game.storm ? 2.2 : 1;
       game.raft.group.rotation.x =
-        Math.sin(worldTime * 0.9) * 0.015 * rockMultiplier;
+        Math.sin(seaTime * 0.9) * 0.015 * rockMultiplier;
       game.raft.group.rotation.z =
-        Math.cos(worldTime * 0.7) * 0.018 * rockMultiplier;
+        Math.cos(seaTime * 0.7) * 0.018 * rockMultiplier;
 
       game.raft.group.traverse(object => {
         if (object.name === 'flame') {
-          const scale = 0.9 + Math.sin(worldTime * 12 + object.id) * 0.2;
+          const scale = 0.9 + Math.sin(seaTime * 12 + object.id) * 0.2;
           object.scale.set(
             scale,
-            1 + Math.sin(worldTime * 15 + object.id) * 0.25,
+            1 + Math.sin(seaTime * 15 + object.id) * 0.25,
             scale
           );
         } else if (object.name === 'prop') {
@@ -174,7 +182,8 @@ const GameRenderer = {
         game.player.z,
         game.player.hook.x,
         game.player.hook.z,
-        game.player.hook
+        game.player.hook,
+        seaTime
       );
     }
     CrewManager.syncMeshes(game.raft);
@@ -185,11 +194,22 @@ const GameRenderer = {
       dt,
       game.raft.cellSize
     );
+    // Rectángulo del casco en coordenadas del mundo, para la espuma y la
+    // sombra del agua alrededor de la balsa. Se reutiliza el objeto.
+    const raftRect = GameRenderer.raftRect || (GameRenderer.raftRect = { cx: 0, cz: 0, hx: 0, hz: 0 });
+    const rb = game.raft.getBounds();
+    const rcs = game.raft.cellSize;
+    raftRect.cx = (rb.minX + rb.maxX + 1) * 0.5 * rcs;
+    raftRect.cz = (rb.minY + rb.maxY + 1) * 0.5 * rcs;
+    raftRect.hx = (rb.maxX - rb.minX + 1) * 0.5 * rcs;
+    raftRect.hz = (rb.maxY - rb.minY + 1) * 0.5 * rcs;
+
     World.updateSea(
-      worldTime,
+      seaTime,
       game.worldOffset,
       game.worldOffsetZ,
-      game.storm
+      game.storm,
+      raftRect
     );
     World.updateDayNight(game.time, game.storm, game.fog, worldDt);
     World.updateRain(worldDt, game.rain);

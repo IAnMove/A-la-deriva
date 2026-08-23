@@ -24,8 +24,9 @@
         <ul>
           <li><strong>WASD / Flechas</strong>: mover al náufrago</li>
           <li><strong>Ratón</strong>: apuntar el gancho / elegir celda de construcción</li>
-          <li><strong>Rueda</strong>: acercar la cámara; permite alejarla más cuando crece la balsa</li>
-          <li><strong>Botón central / Q y R</strong>: girar ligeramente la cámara</li>
+          <li><strong>Rueda</strong>: acercar/alejar la cámara; al acercar del todo entras en primera persona y alejando vuelves</li>
+          <li><strong>Primera persona</strong>: mueve el ratón para mirar; apunta con la mira central y haz clic para lanzar la caña allí</li>
+          <li><strong>Botón central / Q y R</strong>: girar la cámara libremente</li>
           <li><strong>Clic izquierdo</strong>: lanzar/recoger gancho; colocar estructura; caminar a una celda; remar en el borde</li>
           <li><strong>Clic derecho</strong>: seleccionar celda (E para desmontarla)</li>
           <li><strong>Shift</strong>: remar con las manos desde donde estás</li>
@@ -82,6 +83,7 @@
   <div id="fx-heat"></div>
   <div id="fx-hallucination"></div>
   <div id="fx-danger"></div>
+  <div id="fp-crosshair" class="hidden" aria-hidden="true"></div>
 
   <!-- Interfaz principal -->
   <div id="ui" class="hidden">
@@ -300,6 +302,8 @@
     }
   </script>
   <!-- Scripts del juego -->
+  <script src="vendor/GLTFLoader.js"></script>
+  <script src="vendor/SkeletonUtils.js"></script>
   <script src="engine.js"></script>
   <script src="audio.js"></script>
   <script src="save.js"></script>
@@ -307,6 +311,7 @@
   <script src="raft.js"></script>
   <script src="survivor.js"></script>
   <script src="entities.js"></script>
+  <script src="character-glb.js"></script>
   <script src="player.js"></script>
   <script src="hook.js"></script>
   <script src="game-simulation.js"></script>

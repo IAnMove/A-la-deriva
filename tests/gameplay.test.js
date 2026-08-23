@@ -292,6 +292,52 @@ test('conectividad, destrucción y colisiones de la balsa', () => {
   );
 });
 
+test('la balsa crece por anillos y no admite palos', () => {
+  // Una sola celda: los 4 laterales sí, las esquinas no.
+  resetRaft([['0,0', 'floor', 50]]);
+  for (const cell of ['1,0', '-1,0', '0,1', '0,-1']) {
+    const [gx, gy] = cell.split(',').map(Number);
+    assert.equal(run(`Game.raft.canExpandTo(${gx}, ${gy})`), true, cell);
+  }
+  assert.equal(run('Game.raft.canExpandTo(1, 1)'), false);
+  assert.equal(run('Game.raft.canExpandTo(0, 2)'), false);
+
+  // Palo de dos celdas: no deja alargarlo ni cerrar esquinas sin lateral.
+  resetRaft([['0,0', 'floor', 50], ['0,1', 'floor', 50]]);
+  assert.equal(run('Game.raft.canExpandTo(0, 2)'), false);
+  assert.equal(run('Game.raft.canExpandTo(0, -1)'), true);
+  assert.equal(run('Game.raft.canExpandTo(1, 1)'), false);
+  assert.equal(run('Game.raft.canExpandTo(-1, 1)'), false);
+
+  // Cruz completa: las esquinas se desbloquean, el anillo 2 aún no.
+  resetRaft([['0,0', 'floor', 50], ['1,0', 'floor', 50], ['-1,0', 'floor', 50], ['0,1', 'floor', 50], ['0,-1', 'floor', 50]]);
+  assert.equal(run('Game.raft.canExpandTo(1, 1)'), true);
+  assert.equal(run('Game.raft.canExpandTo(-1, -1)'), true);
+  assert.equal(run('Game.raft.canExpandTo(0, 2)'), false);
+  assert.equal(run('Game.raft.canExpandTo(2, 0)'), false);
+
+  // 3x3 completo: nueva fila sí; la esquina del anillo 2 pide sus bordes.
+  resetRaft([
+    ['0,0', 'floor', 50], ['1,0', 'floor', 50], ['-1,0', 'floor', 50],
+    ['0,1', 'floor', 50], ['0,-1', 'floor', 50], ['1,1', 'floor', 50],
+    ['-1,-1', 'floor', 50], ['1,-1', 'floor', 50], ['-1,1', 'floor', 50]
+  ]);
+  assert.equal(run('Game.raft.canExpandTo(0, 2)'), true);
+  assert.equal(run('Game.raft.canExpandTo(1, 2)'), true);
+  assert.equal(run('Game.raft.canExpandTo(2, 1)'), true);
+  assert.equal(run('Game.raft.canExpandTo(2, 2)'), false);
+  assert.equal(run('Game.raft.canExpandTo(0, 3)'), false);
+
+  // Con los dos bordes puestos, la esquina del anillo 2 ya es válida.
+  resetRaft([
+    ['0,0', 'floor', 50], ['1,0', 'floor', 50], ['-1,0', 'floor', 50],
+    ['0,1', 'floor', 50], ['0,-1', 'floor', 50], ['1,1', 'floor', 50],
+    ['-1,-1', 'floor', 50], ['1,-1', 'floor', 50], ['-1,1', 'floor', 50],
+    ['1,2', 'floor', 50], ['2,1', 'floor', 50]
+  ]);
+  assert.equal(run('Game.raft.canExpandTo(2, 2)'), true);
+});
+
 test('el daño reduce prestaciones y a cero las desactiva', () => {
   resetRaft([['0,0', 'net', 35], ['1,0', 'purifier', 40], ['2,0', 'storage', 40]]);
   run(`

@@ -501,7 +501,11 @@ const GameSimulation = Object.freeze({
       const length = Math.hypot(inputX, inputZ) || 1;
       inputX /= length;
       inputZ /= length;
-      const cameraYaw = Number(World.cameraYaw) || 0;
+      // En primera persona el movimiento sigue la dirección de la vista
+      // (fpYaw apunta al frente; la fórmula espera el yaw de la órbita).
+      const cameraYaw = World.firstPerson
+        ? World.fpYaw + Math.PI
+        : (Number(World.cameraYaw) || 0);
       const cosine = Math.cos(cameraYaw);
       const sine = Math.sin(cameraYaw);
       const worldX = inputX * cosine + inputZ * sine;
