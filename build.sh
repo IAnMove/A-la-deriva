@@ -32,6 +32,7 @@ fi
 
 STAGE_DIR="$(mktemp -d /tmp/aladeriva-build.XXXXXX)"
 trap 'rm -rf -- "$STAGE_DIR"' EXIT
+chmod 755 "$STAGE_DIR"
 mkdir -p "$STAGE_DIR/contenido" "$STAGE_DIR/contenido/assets" "$STAGE_DIR/contenido/vendor"
 
 echo "==> Preparando publicación"
