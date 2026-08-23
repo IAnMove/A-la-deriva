@@ -3,3 +3,11 @@ test-results/
 playwright-report/
 blob-report/
 dist/
+.pw-browsers/
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+tools/
+source_assets/
