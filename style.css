@@ -1336,6 +1336,18 @@ button.danger { background: linear-gradient(180deg, #ff7043, #d84315); color: #f
   background: rgba(45, 13, 20, 0.94);
 }
 
+/* En primera persona el centro de pantalla es la mira: el mensaje baja
+   por debajo de ella y se compacta para no tapar la vista. */
+#ui.first-person #event-message {
+  top: 66%;
+  min-width: min(320px, 70vw);
+  max-width: 60%;
+  padding: 8px 13px;
+  border-left-width: 3px;
+  font-size: 0.74rem;
+  line-height: 1.3;
+}
+
 .modal {
   background:
     radial-gradient(circle at center, rgba(12, 47, 67, 0.2), transparent 45%),
