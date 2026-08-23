@@ -3,3 +3,12 @@ test-results/
 playwright-report/
 blob-report/
 dist/
+.pw-browsers/
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+# Shared 3D pipeline lives in ../asset-pipeline (not this repo)
+tools/
+source_assets/

@@ -627,6 +627,8 @@ const World = {
     }
     World.lockPointer();
     World.toggleCrosshair(true);
+    // La interfaz adapta los mensajes al modo inmersivo (ver style.css).
+    World.setFirstPersonUI(true);
   },
 
   exitFirstPerson: () => {
@@ -646,6 +648,13 @@ const World = {
       document.exitPointerLock();
     }
     World.toggleCrosshair(false);
+    World.setFirstPersonUI(false);
+  },
+
+  setFirstPersonUI: active => {
+    if (typeof document === 'undefined') return;
+    const ui = document.getElementById('ui');
+    if (ui) ui.classList.toggle('first-person', active);
   },
 
   toggleCrosshair: show => {
