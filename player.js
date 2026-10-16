@@ -22,6 +22,7 @@ const PlayerVis = {
   tugSuccess: true,
   pose: 'idle',
   glbRig: null,
+  paddle: null,
 
   // Ajuste de posición de la caña respecto al hueso RightHand del rig GLB.
   rodGripOffset: null,
@@ -157,6 +158,7 @@ const PlayerVis = {
     const parts = PlayerVis.mesh.userData.parts;
     PlayerVis.addPlayerDetails(parts);
     PlayerVis.makeRod(parts.handR || parts.armR);
+    PlayerVis.makePaddle();
 
     const positions = new Float32Array(6);
     const geometry = new THREE.BufferGeometry();
@@ -217,6 +219,59 @@ const PlayerVis = {
     }
   },
 
+  makePaddle: () => {
+    const paddle = new THREE.Group();
+    paddle.name = 'player-paddle';
+    paddle.add(
+      cyl(0.025, 0.032, 1.2, 0x9a7549, 0, -0.26, 0, 7),
+      box(0.24, 0.055, 0.055, 0xc8a66d, 0, 0.34, 0),
+      box(0.2, 0.43, 0.045, 0xb99055, 0, -0.97, 0),
+      box(0.027, 0.37, 0.055, 0x705236, 0, -0.97, 0)
+    );
+    paddle.visible = false;
+    PlayerVis.mesh.add(paddle);
+    PlayerVis.paddle = paddle;
+    PlayerVis.paddleHand = new THREE.Vector3();
+    PlayerVis.paddleDirection = new THREE.Vector3();
+    PlayerVis.paddleAxis = new THREE.Vector3(0, -1, 0);
+  },
+
+  poseGlbLocomotion: (p, time, moving) => {
+    if (PlayerVis.fpMode || p.hook || typeof CrewManager === 'undefined' || !CrewManager.aimLimb) return;
+    const mesh = PlayerVis.mesh, rig = PlayerVis.glbRig;
+    const aim = (name, x, y, z) => CrewManager.aimLimb(mesh, rig, name, x, y, z);
+    const rowing = (p.rowAnim || 0) > 0;
+    aim('Neck', 0, 1, 0.03);
+    aim('Head', 0, 1, 0.04);
+    if (rowing) {
+      // Un ciclo por impulso: alcanzar, palear y recuperar por encima del agua.
+      const phase = (1 - Util.clamp(p.rowAnim / 0.65, 0, 1)) * Math.PI * 2;
+      const reach = Math.cos(phase), recovery = Math.max(0, -Math.sin(phase));
+      mesh.rotation.x = 0.14 + (1 - reach) * 0.055;
+      aim('RightArm', 0.1, -0.7 + recovery * 0.2, 0.75 + reach * 0.35);
+      aim('RightForeArm', -0.05, -0.55 + recovery * 0.35, 0.72 + reach * 0.3);
+      aim('LeftArm', -0.12, -0.6, 0.78 + reach * 0.18);
+      aim('LeftForeArm', 0.12, -0.35, 0.85 + reach * 0.18);
+      const hand = rig.bone('RightHand');
+      if (hand && PlayerVis.paddle) {
+        hand.getWorldPosition(PlayerVis.paddleHand);
+        mesh.worldToLocal(PlayerVis.paddleHand);
+        PlayerVis.paddle.position.copy(PlayerVis.paddleHand);
+        PlayerVis.paddleDirection.set(PlayerVis.paddleHand.x + 0.16,
+          -0.3 + recovery * 0.35, 0.92 + reach * 0.34)
+          .sub(PlayerVis.paddleHand).normalize();
+        PlayerVis.paddle.quaternion.setFromUnitVectors(PlayerVis.paddleAxis, PlayerVis.paddleDirection);
+        PlayerVis.paddle.visible = true;
+      }
+      return;
+    }
+    const swing = moving ? Math.sin(PlayerVis.walkTime) * 0.42 : Math.sin(time * 1.8) * 0.018;
+    aim('RightArm', 0.075, -1, 0.05 - swing);
+    aim('LeftArm', -0.075, -1, 0.05 + swing);
+    aim('RightForeArm', -0.025, -1, 0.13 - swing * 0.8);
+    aim('LeftForeArm', 0.025, -1, 0.13 + swing * 0.8);
+  },
+
   syncGlb: (p, dt, time, moving, casting) => {
     const rig = PlayerVis.glbRig;
     const rowing = (p.rowAnim || 0) > 0;
@@ -251,6 +306,8 @@ const PlayerVis = {
       rig.play('Idle');
     }
     rig.update(dt);
+    if (PlayerVis.paddle) PlayerVis.paddle.visible = false;
+    if (!casting) PlayerVis.poseGlbLocomotion(p, time, moving);
 
     // En primera persona la cabeza queda oculta; el mezclador puede
     // sobrescribir la escala del hueso, así que se reaplica cada frame.
@@ -259,7 +316,7 @@ const PlayerVis = {
       if (head) head.scale.setScalar(0.0001);
     }
 
-    if (rowing) {
+    if (rowing && PlayerVis.fpMode) {
       // Remar con la mano: sobre la base agachada, el brazo derecho palea.
       const swing = Math.sin(time * 8);
       const arm = rig.bone('RightArm');
@@ -354,6 +411,7 @@ const PlayerVis = {
     PlayerVis.pose = 'idle';
     if (PlayerVis.glbRig) PlayerVis.glbRig.play('Idle');
     if (PlayerVis.rod) PlayerVis.rod.visible = false;
+    if (PlayerVis.paddle) PlayerVis.paddle.visible = false;
     if (PlayerVis.mesh) PlayerVis.mesh.position.set(1, 0.35, 1);
     if (PlayerVis.aimLine) PlayerVis.aimLine.visible = false;
   },
@@ -578,6 +636,7 @@ const PlayerVis = {
     if ((p.rowAnim || 0) > 0) {
       PlayerVis.pose = 'rowing';
       if (PlayerVis.rod) PlayerVis.rod.visible = false;
+    if (PlayerVis.paddle) PlayerVis.paddle.visible = false;
       const rowSwing = Math.sin(visualTime * 8) * 0.35;
       parts.armL.rotation.x = -1.1 + rowSwing;
       parts.armR.rotation.x = -1.1 + rowSwing;

@@ -52,16 +52,18 @@ const World = {
   seaLastSurfaceTime: -Infinity,
   seaLastDetailTime: -Infinity,
   seaLastStorm: null,
+  seaLastFootprint: null,
   waveAmp: 0.18,
   lightning: 0,
   hullFoam: null,
-  hullFoamRect: { hx: -1, hz: -1 },
+  hullFoamRect: { hx: -1, hz: -1, signature: null },
+  seaUniforms: null,
 
   // Paletas por franja horaria [cielo, niebla, agua, sol, intensidadSol, ambient]
   PHASES: {
     night:   { sky: 0x020c1b, water: 0x08243d, sun: 0x8899ff, sunI: 0.15, ambI: 0.25, fog: 55 },
-    dawn:    { sky: 0x3a4a8a, water: 0x14507a, sun: 0xffbb88, sunI: 0.7,  ambI: 0.5,  fog: 70 },
-    day:     { sky: 0x4a90d9, water: 0x1668a8, sun: 0xffffff, sunI: 1.15, ambI: 0.75, fog: 85 },
+    dawn:    { sky: 0x687faa, water: 0x27627c, sun: 0xffc797, sunI: 0.72, ambI: 0.45,  fog: 70 },
+    day:     { sky: 0x69a5cf, water: 0x236b83, sun: 0xfff3df, sunI: 0.82, ambI: 0.42, fog: 85 },
     dusk:    { sky: 0x5a3a7a, water: 0x1a4a72, sun: 0xff9966, sunI: 0.6,  ambI: 0.45, fog: 65 },
   },
 
@@ -85,11 +87,11 @@ const World = {
     World.scene.add(World.camera);
 
     // Luces
-    World.ambient = new THREE.AmbientLight(0xffffff, 0.75);
+    World.ambient = new THREE.AmbientLight(0xffffff, 0.42);
     World.scene.add(World.ambient);
-    World.hemi = new THREE.HemisphereLight(0xbfe3ff, 0x0a2a4a, 0.35);
+    World.hemi = new THREE.HemisphereLight(0xbfe3ff, 0x0a2a4a, 0.23);
     World.scene.add(World.hemi);
-    World.sunLight = new THREE.DirectionalLight(0xffffff, 1.1);
+    World.sunLight = new THREE.DirectionalLight(0xfff3df, 0.82);
     World.sunLight.position.set(20, 30, 10);
     World.sunLight.castShadow = true;
     World.sunLight.shadow.mapSize.set(1024, 1024);
@@ -107,21 +109,14 @@ const World = {
     const vCount = World.seaGeo.attributes.position.count;
     const colors = new Float32Array(vCount * 3);
     World.seaGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    const seaMat = new THREE.MeshPhongMaterial({
-      color: 0xffffff,
-      vertexColors: true,
-      transparent: true,
-      opacity: 0.96,
-      shininess: 230,
-      specular: 0x4a7a9c,
-      flatShading: false,
-    });
+    const seaMat = World.createSeaMaterial();
     World.sea = new THREE.Mesh(World.seaGeo, seaMat);
     World.sea.receiveShadow = true;
     World.scene.add(World.sea);
     World.seaLastSurfaceTime = -Infinity;
     World.seaLastDetailTime = -Infinity;
     World.seaLastStorm = null;
+    World.seaLastFootprint = null;
 
     // Estrellas (visibles de noche)
     const starGeo = new THREE.BufferGeometry();
@@ -251,6 +246,59 @@ const World = {
     World.renderer.setSize(window.innerWidth, window.innerHeight);
   },
 
+  // Las ondas grandes conservan su malla económica; el rizado y el reflejo
+  // rasante se resuelven por fragmento, sin texturas ni otra pasada de escena.
+  createSeaMaterial: () => {
+    const uniforms = World.seaUniforms = {
+      seaTime: { value: 0 },
+      seaStorm: { value: 0 },
+      seaOffset: { value: new THREE.Vector2() },
+      seaSky: { value: new THREE.Color(0x4a90d9) },
+    };
+    const material = new THREE.MeshPhongMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      shininess: 175,
+      specular: 0x405564,
+      flatShading: false,
+    });
+    material.onBeforeCompile = shader => {
+      Object.assign(shader.uniforms, uniforms);
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vSeaWorld;')
+        .replace('#include <worldpos_vertex>',
+          '#include <worldpos_vertex>\nvSeaWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', `#include <common>
+          varying vec3 vSeaWorld;
+          uniform float seaTime;
+          uniform float seaStorm;
+          uniform vec2 seaOffset;
+          uniform vec3 seaSky;
+        `)
+        .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+          vec2 ocean = vSeaWorld.xz + seaOffset;
+          // Trenes oblicuos: el patrón viaja con las mismas corrientes que
+          // las ondas grandes, sin cuadrícula de ruido ni textura repetida.
+          float rippleA = cos(dot(ocean, vec2(4.1, 1.7)) + seaTime * 2.8);
+          float rippleB = cos(dot(ocean, vec2(-2.3, 5.2)) + seaTime * 3.9);
+          float rippleC = cos(dot(ocean, vec2(8.2, -3.1)) - seaTime * 4.2);
+          float distanceFade = 1.0 - smoothstep(14.0, 65.0, length(vViewPosition));
+          vec2 ripple = (vec2(0.09, 0.038) * rippleA +
+            vec2(-0.042, 0.088) * rippleB + vec2(0.018, -0.012) * rippleC)
+            * distanceFade * (1.0 + seaStorm * 0.4);
+          normal = normalize(normal + mat3(viewMatrix) * vec3(-ripple.x, 0.0, -ripple.y));
+        `)
+        .replace('#include <envmap_fragment>', `#include <envmap_fragment>
+          float facing = clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0);
+          float fresnel = 0.035 + 0.46 * pow(1.0 - facing, 3.0);
+          outgoingLight = mix(outgoingLight, seaSky * 0.82, fresnel);
+        `);
+    };
+    material.customProgramCacheKey = () => 'ocean-ripples-fresnel-v1';
+    return material;
+  },
+
   // Altura de ola en una posición del mundo (para balanceo de balsa/objetos).
   // Son trenes de olas direccionales que viajan (longitudes de 17/11/7/4,5 u,
   // varias olas visibles a la vez desde la cámara), todos muestreables por la
@@ -276,118 +324,220 @@ const World = {
   phaseSunTarget: new THREE.Color(0),
   lightningColor: new THREE.Color(0xffffff),
 
-  // Cinta de espuma y sombra que abraza el casco. El mar (128x128 en 160
-  // unidades) no tiene densidad de vértices para dibujarla, así que es una
-  // malla aparte de 4 filas: sombra junto al casco y espuma que se apaga
-  // hacia fuera. Se reconstruye solo si cambia la forma de la balsa.
-  HULL_FOAM_RINGS: [-0.12, 0.22, 0.7, 1.35],
-  HULL_FOAM_STEP: 0.55,
+  // La huella real evita espuma en celdas vacías de una balsa en L.
+  // visualRevision permite reutilizarla también cuando sólo cambia un edificio.
+  footprintSignature: raftRect => {
+    if (!raftRect) return '';
+    const raft = raftRect.raft;
+    if (!raft || !raft.grid) return raftRect.hx + ':' + raftRect.hz;
+    const revision = Number.isFinite(raft.visualRevision)
+      ? raft.visualRevision : Array.from(raft.grid.keys()).join('|');
+    return raft.cellSize + ':' + revision;
+  },
 
-  buildHullFoam: (hx, hz) => {
-    const rings = World.HULL_FOAM_RINGS;
-    const step = World.HULL_FOAM_STEP;
-    // Perímetro del rectángulo del casco con normales salientes.
-    const points = [];
-    const nx = Math.max(2, Math.round((hx * 2) / step));
-    const nz = Math.max(2, Math.round((hz * 2) / step));
-    for (let i = 0; i < nx; i++) points.push({ x: -hx + (2 * hx * i) / nx, z: -hz, ox: 0, oz: -1 });
-    for (let i = 0; i < nz; i++) points.push({ x: hx, z: -hz + (2 * hz * i) / nz, ox: 1, oz: 0 });
-    for (let i = 0; i < nx; i++) points.push({ x: hx - (2 * hx * i) / nx, z: hz, ox: 0, oz: 1 });
-    for (let i = 0; i < nz; i++) points.push({ x: -hx, z: hz - (2 * hz * i) / nz, ox: -1, oz: 0 });
-
-    const rows = rings.length;
-    const count = points.length * rows;
-    const positions = new Float32Array(count * 3);
-    const colors = new Float32Array(count * 4);
-    const meta = new Float32Array(count * 2); // fila, fase de pulso
-    const index = [];
-    points.forEach((p, i) => {
-      const phase = i * 0.9;
-      rings.forEach((offset, row) => {
-        const vi = i * rows + row;
-        positions[vi * 3] = p.x + p.ox * offset;
-        positions[vi * 3 + 1] = 0;
-        positions[vi * 3 + 2] = p.z + p.oz * offset;
-        meta[vi * 2] = row;
-        meta[vi * 2 + 1] = phase + row * 1.7;
-      });
-      const next = (i + 1) % points.length;
-      for (let row = 0; row < rows - 1; row++) {
-        const a = i * rows + row;
-        const b = next * rows + row;
-        index.push(a, b, a + 1, b, b + 1, a + 1);
+  // Altura visual compartida por mar y espuma. La cubierta desplaza el agua:
+  // se suaviza una celda de la malla alrededor para que ningún triángulo
+  // interpolado atraviese los tablones al cabecear o en una tormenta.
+  seaSurfaceHeight: (x, z, time, offsetX, offsetZ, storm, raftRect, rawHeight) => {
+    const h = rawHeight === undefined
+      ? World.waveHeight(x, z, time, offsetX, offsetZ) : rawHeight;
+    const crest = Math.max(0, h - (storm ? 0.5 : 0.38));
+    let y = (h + crest * crest * (storm ? 0.9 : 0.65)) * World.waveAmp;
+    if (!raftRect) return y;
+    const margin = 1.85;
+    if (Math.abs(x - raftRect.cx) > raftRect.hx + margin ||
+        Math.abs(z - raftRect.cz) > raftRect.hz + margin) return y;
+    const raft = raftRect.raft;
+    let distance = Infinity;
+    if (raft && raft.grid) {
+      const cs = raft.cellSize;
+      const gx = Math.floor(x / cs), gz = Math.floor(z / cs);
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dz = -1; dz <= 1; dz++) {
+          const cx = gx + dx, cz = gz + dz;
+          if (!raft.grid.has(cx + ',' + cz)) continue;
+          const qx = Math.max(cx * cs - x, 0, x - (cx + 1) * cs);
+          const qz = Math.max(cz * cs - z, 0, z - (cz + 1) * cs);
+          distance = Math.min(distance, Math.hypot(qx, qz));
+        }
       }
+    } else {
+      distance = Math.hypot(
+        Math.max(0, Math.abs(x - raftRect.cx) - raftRect.hx),
+        Math.max(0, Math.abs(z - raftRect.cz) - raftRect.hz)
+      );
+    }
+    if (distance > margin) return y;
+    const group = raft && raft.group;
+    const rx = group ? group.rotation.x : Math.sin(time * 0.9) * 0.015 * (storm ? 2.2 : 1);
+    const rz = group ? group.rotation.z : Math.cos(time * 0.7) * 0.018 * (storm ? 2.2 : 1);
+    const bob = group ? group.position.y :
+      World.waveHeight(raftRect.cx, raftRect.cz, time, offsetX, offsetZ) * World.waveAmp * 0.6;
+    const deck = raft && Number.isFinite(raft.deckHeight) ? raft.deckHeight : 0.35;
+    const px = group ? group.position.x : 0, pz = group ? group.position.z : 0;
+    const normalY = Math.cos(rx) * Math.cos(rz);
+    const ceiling = bob + (deck - 0.2 + Math.sin(rz) * (x - px) -
+      Math.sin(rx) * Math.cos(rz) * (z - pz)) / normalY;
+    // Un borde amplio y continuo oculta la transición bajo los flotadores.
+    const release = Math.max(0, (distance - 0.85) / (margin - 0.85));
+    return Math.min(y, ceiling + release * release * 1.7);
+  },
+
+  // La espuma usa el triángulo que realmente dibuja la GPU; evaluar una
+  // onda analítica entre vértices la haría flotar o hundirse en las crestas.
+  sampleSeaMeshHeight: (x, z) => {
+    const geometry = World.seaGeo;
+    const parameters = geometry && geometry.parameters;
+    if (!parameters || !World.sea) return null;
+    const nx = parameters.widthSegments, nz = parameters.heightSegments;
+    const width = parameters.width, depth = parameters.height;
+    const fx = (x - World.sea.position.x + width * 0.5) / width * nx;
+    const fz = (z - World.sea.position.z + depth * 0.5) / depth * nz;
+    if (fx < 0 || fz < 0 || fx > nx || fz > nz) return null;
+    const ix = Math.min(nx - 1, Math.floor(fx));
+    const iz = Math.min(nz - 1, Math.floor(fz));
+    const tx = fx - ix, tz = fz - iz;
+    const positions = geometry.attributes.position;
+    const a = iz * (nx + 1) + ix;
+    const h00 = positions.getY(a), h10 = positions.getY(a + 1);
+    const h01 = positions.getY(a + nx + 1), h11 = positions.getY(a + nx + 2);
+    return tx + tz <= 1
+      ? h00 + (h10 - h00) * tx + (h01 - h00) * tz
+      : h11 + (h01 - h11) * (1 - tx) + (h10 - h11) * (1 - tz);
+  },
+
+  // Parches cortos separados y afinados en los extremos: espuma de contacto,
+  // nunca una sábana rectangular. Cada parche parte de una arista expuesta.
+  buildHullFoam: (hx, hz, raft = null) => {
+    const edges = [];
+    const addEdges = (x0, z0, x1, z1, occupied) => {
+      if (!occupied(0, -1)) edges.push([x0, z0, x1, z0, 0, -1]);
+      if (!occupied(1, 0)) edges.push([x1, z0, x1, z1, 1, 0]);
+      if (!occupied(0, 1)) edges.push([x1, z1, x0, z1, 0, 1]);
+      if (!occupied(-1, 0)) edges.push([x0, z1, x0, z0, -1, 0]);
+    };
+    if (raft && raft.grid) {
+      const cs = raft.cellSize;
+      for (const key of raft.grid.keys()) {
+        const [gx, gz] = key.split(',').map(Number);
+        addEdges(gx * cs, gz * cs, (gx + 1) * cs, (gz + 1) * cs,
+          (dx, dz) => raft.grid.has((gx + dx) + ',' + (gz + dz)));
+      }
+    } else {
+      addEdges(-hx, -hz, hx, hz, () => false);
+    }
+    const positions = [], colors = [], metadata = [], indices = [];
+    const rings = [0.035, 0.14, 0.34, 0.58];
+    const across = [-0.5, -0.18, 0.18, 0.5];
+    for (const edge of edges) {
+      const [x0, z0, x1, z1, nx, nz] = edge;
+      const length = Math.hypot(x1 - x0, z1 - z0);
+      const segments = Math.max(1, Math.ceil(length / 0.9));
+      for (let segment = 0; segment < segments; segment++) {
+        const start = positions.length / 3;
+        const phase = x0 * 2.17 + z0 * 1.39 + segment * 2.51 + nx * 0.8;
+        const width = length / segments * (0.7 + 0.08 * Math.sin(phase));
+        const midpoint = (segment + 0.5) / segments;
+        for (let column = 0; column < across.length; column++) {
+          const along = midpoint + across[column] * width / length;
+          for (let row = 0; row < rings.length; row++) {
+            const distance = rings[row] * (0.85 + 0.15 * Math.cos(phase));
+            const px = x0 + (x1 - x0) * along + nx * distance;
+            const pz = z0 + (z1 - z0) * along + nz * distance;
+            positions.push(px, 0, pz);
+            colors.push(1, 1, 1, 0);
+            metadata.push(px, pz, nx, nz, phase, row, column);
+          }
+        }
+        for (let column = 0; column < 3; column++) {
+          for (let row = 0; row < 3; row++) {
+            const a = start + column * 4 + row, b = a + 4;
+            indices.push(a, b, a + 1, b, b + 1, a + 1);
+          }
+        }
+      }
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 4));
+    geometry.setIndex(indices);
+    geometry.userData.meta = new Float32Array(metadata);
+    geometry.userData.edgeCount = edges.length;
+    const material = new THREE.MeshBasicMaterial({
+      vertexColors: true, transparent: true, depthWrite: false,
+      side: THREE.DoubleSide,
     });
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geo.setAttribute('color', new THREE.BufferAttribute(colors, 4));
-    geo.setIndex(index);
-    geo.userData.meta = meta;
-    const mat = new THREE.MeshBasicMaterial({
-      vertexColors: true,
-      transparent: true,
-      depthWrite: false
-    });
-    const mesh = new THREE.Mesh(geo, mat);
+    const mesh = new THREE.Mesh(geometry, material);
     mesh.renderOrder = 2;
     mesh.frustumCulled = false;
     return mesh;
   },
 
-  // La cinta cabalga las olas (30 Hz) y su pulso de espuma sigue el detalle
-  // del mar (10 Hz), respetando el presupuesto de actualización.
   updateHullFoam: (raftRect, time, offsetX, offsetZ, storm, refreshDetail) => {
     if (!raftRect) {
       if (World.hullFoam) World.hullFoam.visible = false;
       return;
     }
-    const rect = World.hullFoamRect;
-    if (!World.hullFoam ||
-        rect.hx !== raftRect.hx || rect.hz !== raftRect.hz) {
+    const signature = World.footprintSignature(raftRect);
+    const cached = World.hullFoamRect;
+    let rebuilt = false;
+    if (!World.hullFoam || cached.signature !== signature || cached.raft !== raftRect.raft) {
       if (World.hullFoam) {
         World.scene.remove(World.hullFoam);
         World.hullFoam.geometry.dispose();
         World.hullFoam.material.dispose();
       }
-      World.hullFoam = World.buildHullFoam(raftRect.hx, raftRect.hz);
+      World.hullFoam = World.buildHullFoam(raftRect.hx, raftRect.hz, raftRect.raft);
       World.scene.add(World.hullFoam);
-      rect.hx = raftRect.hx;
-      rect.hz = raftRect.hz;
+      cached.signature = signature;
+      cached.raft = raftRect.raft;
+      rebuilt = true;
     }
-    World.hullFoam.visible = true;
-    World.hullFoam.position.set(raftRect.cx, 0, raftRect.cz);
-
-    const pos = World.hullFoam.geometry.attributes.position;
-    const col = World.hullFoam.geometry.attributes.color;
-    const meta = World.hullFoam.geometry.userData.meta;
-    const amp = World.waveAmp;
-    const foam = World.foamColor;
-    const shadeR = World.waterDeep.r * 0.4;
-    const shadeG = World.waterDeep.g * 0.4;
-    const shadeB = World.waterDeep.b * 0.4;
-    const pulseAmp = storm ? 1 : 0.8;
-    for (let i = 0; i < pos.count; i++) {
-      const wx = raftRect.cx + pos.getX(i);
-      const wz = raftRect.cz + pos.getZ(i);
-      const h = World.waveHeight(wx, wz, time, offsetX, offsetZ);
-      pos.setY(i, h * amp * 0.85 + 0.05);
-      if (!refreshDetail) continue;
-      const row = meta[i * 2];
-      const phase = meta[i * 2 + 1];
-      const pulse = 0.55 + 0.45 * Math.sin(time * 3.1 + phase);
-      if (row === 0) {
-        col.setXYZW(i, shadeR, shadeG, shadeB, 0.5);
-      } else {
-        const fade = row === 1 ? 0.55 : row === 2 ? 0.3 : 0;
-        col.setXYZW(i, foam.r, foam.g, foam.b, fade * pulse * pulseAmp);
-      }
+    const mesh = World.hullFoam;
+    mesh.visible = true;
+    const raft = raftRect.raft;
+    const group = raft && raft.group;
+    if (group) group.updateMatrixWorld(true);
+    const matrix = group && group.matrixWorld.elements;
+    const positions = mesh.geometry.attributes.position;
+    const colors = mesh.geometry.attributes.color;
+    const meta = mesh.geometry.userData.meta;
+    for (let i = 0; i < positions.count; i++) {
+      const index = i * 7;
+      const phase = meta[index + 4];
+      const row = meta[index + 5], column = meta[index + 6];
+      const spread = Math.sin(time * 1.5 + phase) * 0.035 * row;
+      const lx = meta[index] + meta[index + 2] * spread;
+      const lz = meta[index + 1] + meta[index + 3] * spread;
+      const x = matrix ? matrix[0] * lx + matrix[8] * lz + matrix[12] : lx + (raft ? 0 : raftRect.cx);
+      const z = matrix ? matrix[2] * lx + matrix[10] * lz + matrix[14] : lz + (raft ? 0 : raftRect.cz);
+      const h = World.waveHeight(x, z, time, offsetX, offsetZ);
+      const renderedHeight = World.sampleSeaMeshHeight(x, z);
+      const y = renderedHeight === null
+        ? World.seaSurfaceHeight(x, z, time, offsetX, offsetZ, storm, raftRect, h)
+        : renderedHeight;
+      positions.setXYZ(i, x, y + 0.026, z);
+      if (!refreshDetail && !rebuilt) continue;
+      const endFade = column === 0 || column === 3 ? 0 : 1;
+      const edgeFade = row === 1 ? 1 : row === 2 ? 0.32 : 0;
+      const pulse = Util.clamp(Math.sin(time * 1.45 + phase) * 0.55 + h * 0.4 + 0.2, 0, 1);
+      const alpha = endFade * edgeFade * pulse * (storm ? 0.52 : 0.32);
+      colors.setXYZW(i, World.foamColor.r, World.foamColor.g, World.foamColor.b, alpha);
     }
-    pos.needsUpdate = true;
-    if (refreshDetail) col.needsUpdate = true;
+    positions.needsUpdate = true;
+    if (refreshDetail || rebuilt) colors.needsUpdate = true;
   },
 
   updateSea: (time, offsetX, offsetZ, storm, raftRect = null) => {
     const cam = World.camTarget;
+    if (World.seaUniforms) {
+      World.seaUniforms.seaTime.value = time;
+      World.seaUniforms.seaStorm.value = storm ? 1 : 0;
+      World.seaUniforms.seaOffset.value.set(offsetX, offsetZ);
+    }
+    const footprint = World.footprintSignature(raftRect);
+    const hullChanged = World.seaLastFootprint !== footprint ||
+      World.seaLastRaft !== (raftRect && raftRect.raft);
     // El mar sigue a la cámara
     World.sea.position.set(cam.x, 0, cam.z);
 
@@ -396,7 +546,9 @@ const World = {
     const surfaceElapsed = time - World.seaLastSurfaceTime;
     const timeReset = !Number.isFinite(surfaceElapsed) || surfaceElapsed < 0;
     const stormChanged = World.seaLastStorm !== storm;
-    if (!timeReset && !stormChanged && surfaceElapsed < World.SEA_SURFACE_INTERVAL) return;
+    if (!timeReset && !stormChanged && !hullChanged && surfaceElapsed < World.SEA_SURFACE_INTERVAL) return;
+    World.seaLastFootprint = footprint;
+    World.seaLastRaft = raftRect && raftRect.raft;
     World.seaLastSurfaceTime = time;
 
     const targetAmp = storm ? 0.8 : 0.55;
@@ -409,7 +561,7 @@ const World = {
     World.waveAmp = Util.lerp(World.waveAmp, targetAmp, amplitudeBlend);
 
     const detailElapsed = time - World.seaLastDetailTime;
-    const refreshDetail = timeReset || stormChanged ||
+    const refreshDetail = timeReset || stormChanged || hullChanged ||
       !Number.isFinite(detailElapsed) || detailElapsed < 0 ||
       detailElapsed >= World.SEA_DETAIL_INTERVAL;
     if (refreshDetail) {
@@ -420,36 +572,12 @@ const World = {
     const pos = World.seaGeo.attributes.position;
     const colAttr = World.seaGeo.attributes.color;
     const deep = World.waterDeep, light = World.waterLight, foam = World.foamColor;
-    const amp = World.waveAmp;
-    // Crestas afiladas: realce cuadrático por encima de un umbral. Es solo
-    // visual; el balanceo de la balsa sigue usando waveHeight suave.
-    const chopBase = storm ? 0.5 : 0.38;
-    const chopGain = storm ? 0.9 : 0.65;
-    const foamTh = storm ? 0.6 : 0.72; // umbral de cresta para espuma
+    const foamTh = storm ? 0.6 : 0.78;
     for (let i = 0; i < pos.count; i++) {
       const x = pos.getX(i) + cam.x;
       const z = pos.getZ(i) + cam.z;
-      const h = World.waveHeight(x, z, time, offsetX, offsetZ); // ~[-1.1, 1.1]
-      const crest = Math.max(0, h - chopBase);
-      let y = (h + crest * crest * chopGain) * amp;
-      // Rizado cruzado solo visual (λ ~ 13 u, bien muestreado por la malla):
-      // rompe la regularidad de los trenes sin tocar el balanceo físico.
-      y += Math.sin(x * 0.5 + time * 2.0) * Math.sin(z * 0.45 + time * 1.6) *
-        0.14 * amp;
-
-      // Distancia al casco (negativa bajo la balsa) para oleaje de casco.
-      let dHull = Infinity;
-      if (raftRect) {
-        const dxr = Math.abs(x - raftRect.cx) - raftRect.hx;
-        const dzr = Math.abs(z - raftRect.cz) - raftRect.hz;
-        dHull = Math.max(dxr, dzr);
-        if (dHull > 0 && dHull < 1.6) {
-          // Anillos de oleaje que nacen en el casco y se apagan al alejarse.
-          const band = 1 - dHull / 1.6;
-          y += Math.sin(dHull * 2.4 - time * 2.8) * 0.06 * band * band * amp;
-        }
-      }
-      pos.setY(i, y);
+      const h = World.waveHeight(x, z, time, offsetX, offsetZ);
+      pos.setY(i, World.seaSurfaceHeight(x, z, time, offsetX, offsetZ, storm, raftRect, h));
 
       if (!refreshDetail) continue;
       // Gradiente valle -> cresta, estirado para dar contraste: los valles
@@ -462,10 +590,10 @@ const World = {
       let b = deep.b + (light.b - deep.b) * t;
       // Espuma en las crestas (vetas direccionales para que sean parches)
       if (h > foamTh) {
-        const sparkle = 0.5 + 0.5 *
-          Math.sin(x * 3.3 + z * 0.9 + time * 2.1) *
-          Math.sin(z * 1.6 - time * 1.3);
-        const f = Math.min(1, (h - foamTh) / 0.25) * sparkle * (storm ? 1 : 0.85);
+        const sparkle = 0.5 + 0.5 * Math.sin(
+          (x + offsetX) * 0.62 - (z + offsetZ) * 0.38 + time * 1.1
+        );
+        const f = Math.min(1, (h - foamTh) / 0.2) * sparkle * (storm ? 0.75 : 0.4);
         r += (foam.r - r) * f;
         g += (foam.g - g) * f;
         b += (foam.b - b) * f;
@@ -486,8 +614,8 @@ const World = {
     const safeDt = Math.max(0, Math.min(Number(dt) || 0, 0.1));
     let a, b, t;
     if (hour < 5 || hour >= 21) { a = b = World.PHASES.night; t = 0; }
-    else if (hour < 8) { a = World.PHASES.night; b = World.PHASES.dawn; t = (hour - 5) / 3; }
-    else if (hour < 10) { a = World.PHASES.dawn; b = World.PHASES.day; t = (hour - 8) / 2; }
+    else if (hour < 7) { a = World.PHASES.night; b = World.PHASES.dawn; t = (hour - 5) / 2; }
+    else if (hour < 9) { a = World.PHASES.dawn; b = World.PHASES.day; t = (hour - 7) / 2; }
     else if (hour < 17) { a = b = World.PHASES.day; t = 0; }
     else if (hour < 19) { a = World.PHASES.day; b = World.PHASES.dusk; t = (hour - 17) / 2; }
     else { a = World.PHASES.dusk; b = World.PHASES.night; t = (hour - 19) / 2; }
@@ -552,9 +680,10 @@ const World = {
       World.scene.fog.near = Math.max(0, World.scene.fog.far - 12);
     }
     // Colores del agua por vértice: profundo, cresta y espuma
-    World.waterDeep.copy(water).multiplyScalar(0.45);
-    World.waterLight.copy(water).multiplyScalar(1.18).lerp(sky, 0.1);
+    World.waterDeep.copy(water).multiplyScalar(0.52);
+    World.waterLight.copy(water).multiplyScalar(0.95).lerp(sky, 0.07);
     World.foamColor.setHex(0xeaf6ff).lerp(sky, 0.25);
+    if (World.seaUniforms) World.seaUniforms.seaSky.value.copy(sky);
     World.sunLight.color.copy(sunC);
     World.sunLight.intensity = sunI;
     World.ambient.intensity = ambI;

@@ -80,6 +80,7 @@ load('engine.js');
 load('raft.js');
 load('survivor.js');
 load('game-simulation.js');
+load('game-actions.js');
 load('game-ui.js');
 load('game-renderer.js');
 run(`
@@ -1900,3 +1901,63 @@ test('una partida terminada no deja un guardado que permita deshacer el desenlac
 });
 
 console.log('Todas las pruebas jugables han pasado.');
+
+
+test('el cuidado directo respeta costes, límites y conversación diaria persistente', () => {
+  resetRaft([['0,0','floor',50]]);
+  run(`
+    Game.state='playing'; Game.paused=false; Game.crewConflict={active:false};
+    Game.player.hook=null; Game.raft.selected=null; Game.player.x=1; Game.player.z=1;
+    Game.day=8; CrewManager.members=[];
+    var interactionMember=new Survivor();
+    interactionMember.trust=40; interactionMember.stress=50;
+    interactionMember.hunger=50; interactionMember.thirst=40;
+    CrewManager.add(interactionMember); CrewManager.assignPosition(interactionMember,Game.raft);
+    Game.resources.food=.5;Game.resources.water=.65;
+  `);
+  assert.equal(run("Game.interactWithCrew(interactionMember,'talk')"),true);
+  assert.equal(run('interactionMember.trust'),45);
+  assert.equal(run("Game.interactWithCrew(interactionMember,'talk')"),false);
+  assert.equal(run('interactionMember.trust'),45);
+  assert.equal(run('Survivor.fromData(Game.getSaveData().crew[0]).lastTalkDay'),8);
+  assert.equal(run("Game.interactWithCrew(interactionMember,'ration')"),true);
+  assert.equal(run('Game.resources.food'),0);
+  assert.equal(run('Game.resources.water'),0);
+  assert.equal(run('interactionMember.hunger'),68);
+  assert.equal(run("Game.interactWithCrew(interactionMember,'ration')"),false);
+  run('Game.resources.food=1;Game.resources.water=1;interactionMember.hunger=100;interactionMember.thirst=100;');
+  assert.equal(run("Game.interactWithCrew(interactionMember,'ration')"),false);
+  assert.equal(run('Game.resources.food'),1);
+  assert.equal(run("Game.interactWithCrew(interactionMember,'rest')"),true);
+  assert.equal(run('interactionMember.job'),'rest');
+  run('interactionMember.alive=false;');
+  assert.equal(run("Game.interactWithCrew(interactionMember,'talk')"),false);
+});
+
+
+test('E abre un diálogo de náufrago con opciones de costes explícitos', () => {
+  run(`
+    interactionMember.alive=true;interactionMember.hostile=false;
+    interactionMember.hunger=60;interactionMember.thirst=60;
+    Game.interact();
+  `);
+  assert.match(elements.get('decision-title').textContent, /.+ · .+/);
+  assert.equal(elements.get('decision-buttons').children.length,4);
+  assert.match(elements.get('decision-buttons').children[1].textContent, /0,5 comida/);
+  assert.equal(run('Game.paused'),true);
+  elements.get('decision-buttons').children[3].onclick();
+  assert.equal(run('Game.paused'),false);
+});
+
+
+test('la enfermería no gasta tela en otra acción cuando falta agua para la infección', () => {
+  resetRaft([['0,0','infirmary',40]]);
+  run(`
+    Game.infectionDays=2;Game.resources.cloth=1;Game.resources.water=0;
+    Game.player.health=50;Game.player.hook=null;Game.raft.selected=null;
+    Game.interact();
+  `);
+  assert.equal(run('Game.resources.cloth'),1);
+  assert.equal(run('Game.player.health'),50);
+  assert.equal(run('Game.getInteractionContext().available'),false);
+});

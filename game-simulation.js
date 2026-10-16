@@ -439,8 +439,9 @@ const GameSimulation = Object.freeze({
         player.vz = deltaZ / distance * speed;
         const previousX = player.x;
         const previousZ = player.z;
-        player.x += player.vx * dt;
-        player.z += player.vz * dt;
+        const step = Math.min(distance, speed * dt);
+        player.x += deltaX / distance * step;
+        player.z += deltaZ / distance * step;
         const nextCell = game.raft.worldToGrid(player.x, player.z);
         if (!game.raft.has(nextCell.gx, nextCell.gy)) {
           const previousCell =
@@ -476,8 +477,9 @@ const GameSimulation = Object.freeze({
         player.vz = deltaZ / distance * speed;
         const previousX = player.x;
         const previousZ = player.z;
-        player.x += player.vx * dt;
-        player.z += player.vz * dt;
+        const step = Math.min(distance, speed * dt);
+        player.x += deltaX / distance * step;
+        player.z += deltaZ / distance * step;
         const nextCell = game.raft.worldToGrid(player.x, player.z);
         if (!game.raft.has(nextCell.gx, nextCell.gy)) {
           const previousCell =

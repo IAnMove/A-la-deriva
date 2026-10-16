@@ -10,6 +10,7 @@ module.exports = defineConfig({
   use: {
     baseURL: 'http://127.0.0.1:4173',
     browserName: 'chromium',
+    ...(process.env.PLAYWRIGHT_CHANNEL ? { channel: process.env.PLAYWRIGHT_CHANNEL } : {}),
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure'
   },

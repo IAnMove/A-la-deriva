@@ -23,3 +23,12 @@ npm run test:all
 ```
 
 El servidor de pruebas también puede iniciarse manualmente con `npm run serve`.
+
+Si ya tienes Chrome instalado, puedes ejecutar las pruebas sin descargar otro navegador:
+
+```powershell
+$env:PLAYWRIGHT_CHANNEL = "chrome"
+npm run test:all
+```
+
+Las pruebas incluyen acciones de tripulación, conversación diaria y guardado, raciones, reparación, bebida, movimiento y pausa; también huella del agua, espuma, modelos de balsa y rutas de los náufragos.

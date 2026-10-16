@@ -46,6 +46,7 @@ const WORLD_SCALE = 0.05; // 40 px = 2 unidades (1 celda)
 const Input = {
   keys: {},
   held: {},
+  pressed: new Set(),
   mouse: { x: 0, y: 0, down: false, clicked: false, rightClicked: false },
   virtualPulses: new Set(),
   touchPointer: null,
@@ -71,6 +72,7 @@ const Input = {
       }
       Input.held[e.code] = true;
       Input.keys[e.code] = true;
+      Input.pressed.add(e.code);
       if (e.code === 'Space' || e.code === 'KeyB' || e.code === 'KeyE') e.preventDefault();
     });
     window.addEventListener('keyup', e => {
@@ -81,6 +83,7 @@ const Input = {
       Input.keys = {};
       Input.held = {};
       Input.virtualPulses.clear();
+      Input.pressed.clear();
       Input.touchPointer = null;
       Input.mouse.down = false;
       Input.resetClick();
@@ -229,12 +232,15 @@ const Input = {
   },
   isDown: (code) => !!Input.held[code] || !!Input.keys[code],
   wasPressed: (code) => {
+    // Conserva un toque breve aunque keyup llegue antes del siguiente frame.
+    if (Input.pressed.delete(code)) { Input.keys[code] = 'pressed'; return true; }
     if (Input.keys[code] === 'pressed') return false;
     if (Input.keys[code]) { Input.keys[code] = 'pressed'; return true; }
     return false;
   },
   resetClick: () => { Input.mouse.clicked = false; Input.mouse.rightClicked = false; },
   clearFrame: () => {
+    Input.pressed.clear();
     for (const k in Input.keys) if (Input.keys[k] === 'pressed') Input.keys[k] = false;
     for (const code of Input.virtualPulses) Input.keys[code] = false;
     Input.virtualPulses.clear();

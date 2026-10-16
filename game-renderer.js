@@ -85,7 +85,8 @@ const GameRenderer = {
 
     const placing = BuildManager.placing && BuildManager.selected;
     game.highlightGroup.visible = !!placing;
-    game.rowGroup.visible = !placing && game.state === 'playing';
+    game.rowGroup.visible = !placing && game.state === 'playing' && !game.paused &&
+      !!(game.player.rowTarget || Input.isDown('ShiftLeft') || Input.isDown('ShiftRight'));
 
     game.ghostMesh.visible = false;
     game.hoverRowMesh.visible = false;
@@ -125,6 +126,31 @@ const GameRenderer = {
     }
   },
 
+  updateActionMarker(game, time) {
+    if (!game.raft.group) return;
+    if (!GameRenderer.actionMarker) {
+      const geometry = new THREE.RingGeometry(0.28, 0.34, 32);
+      geometry.rotateX(-Math.PI / 2);
+      GameRenderer.actionMarker = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
+        color: 0x8ff1d8, transparent: true, opacity: 0.8, depthWrite: false, side: THREE.DoubleSide
+      }));
+      GameRenderer.actionMarker.name = 'action-destination';
+    }
+    const marker = GameRenderer.actionMarker;
+    if (marker.parent !== game.raft.group) game.raft.group.add(marker);
+    const destination = game.player.moveDestination || game.player.moveTarget;
+    const context = game.getInteractionContext();
+    const member = context?.kind === 'crew' ? context.member : null;
+    marker.visible = game.state === 'playing' && !game.paused && !BuildManager.placing && !!(destination || member);
+    if (!marker.visible) return;
+    const cs = game.raft.cellSize;
+    const x = destination ? (destination.gx + 0.5) * cs : member.mesh?.position.x ?? (member.gx + 0.5) * cs;
+    const z = destination ? (destination.gy + 0.5) * cs : member.mesh?.position.z ?? (member.gy + 0.5) * cs;
+    marker.position.set(x, 0.38, z);
+    marker.scale.setScalar(1 + Math.sin(time * 4) * 0.06);
+    marker.material.color.setHex(destination ? 0x8ff1d8 : 0xffd18a);
+  },
+
   draw(game, dt) {
     const worldRunning = game.state === 'playing' && !game.paused;
     const worldDt = worldRunning ? dt : 0;
@@ -157,7 +183,14 @@ const GameRenderer = {
       game.raft.group.rotation.z =
         Math.cos(seaTime * 0.7) * 0.018 * rockMultiplier;
 
-      game.raft.group.traverse(object => {
+      if (game.raft.updateVisuals) game.raft.updateVisuals(seaTime, worldDt, {
+        wind: game.storm ? 1.8 : 0.7,
+        motorActive: game.resources.fuel > 0 && game.victoryCondition === 'island',
+        anchorDeployed: game.anchorDeployed,
+        beaconLit: game.beaconLit,
+        heading: game.navigationHeading
+      });
+      else game.raft.group.traverse(object => {
         if (object.name === 'flame') {
           const scale = 0.9 + Math.sin(seaTime * 12 + object.id) * 0.2;
           object.scale.set(
@@ -186,7 +219,8 @@ const GameRenderer = {
         seaTime
       );
     }
-    CrewManager.syncMeshes(game.raft);
+    CrewManager.syncMeshes(game.raft, characterDt, characterTime);
+    GameRenderer.updateActionMarker(game, characterTime);
 
     World.updateCamera(
       center,
@@ -197,6 +231,7 @@ const GameRenderer = {
     // Rectángulo del casco en coordenadas del mundo, para la espuma y la
     // sombra del agua alrededor de la balsa. Se reutiliza el objeto.
     const raftRect = GameRenderer.raftRect || (GameRenderer.raftRect = { cx: 0, cz: 0, hx: 0, hz: 0 });
+    raftRect.raft = game.raft;
     const rb = game.raft.getBounds();
     const rcs = game.raft.cellSize;
     raftRect.cx = (rb.minX + rb.maxX + 1) * 0.5 * rcs;

@@ -1578,3 +1578,39 @@ button.danger { background: linear-gradient(180deg, #ff7043, #d84315); color: #f
   .touch-controls #mobile-controls { height: 142px; padding-bottom: 4px; }
   .mobile-pad { grid-template: repeat(3, 42px) / repeat(3, 42px); }
 }
+
+/* Acciones de cubierta: el coste y el resultado están junto al control. */
+#interaction-prompt {
+  position: absolute; left: 50%; bottom: 88px; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 18px; width: max-content;
+  max-width: min(510px, calc(100vw - 28px)); padding: 12px 14px 12px 18px;
+  border: 1px solid rgba(113, 221, 231, .3); border-radius: 14px;
+  background: rgba(5, 25, 36, .9); box-shadow: 0 8px 28px #00121a40;
+  backdrop-filter: blur(14px); pointer-events: auto;
+}
+.interaction-copy {display: flex; flex-direction: column; gap: 5px; min-width: 0;}
+#interaction-label {font-size: .85rem; font-weight: 700; color: #eaf7ed;}
+#interaction-detail {font-size: .7rem; color: #b1cdd4; line-height: 1.5;}
+#btn-context-action {margin: 0; min-width: 42px; min-height: 42px; flex-shrink: 0; padding: 8px 12px; border-color: #78d4c655; background: #1a514e;}
+#btn-context-action kbd {font: inherit; font-weight: 700;}
+#interaction-prompt.unavailable {border-color: #b1cdd422;}
+#interaction-prompt.destructive {border-color: #ffac6c66;}
+#interaction-prompt.destructive #btn-context-action {background: #854426;}
+.crew-interactions {display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 8px;}
+.crew-interactions button {margin: 0; padding: 8px 10px; font-size: .74rem; border-radius: 8px; min-height: 38px;}
+.crew-activity {color: #84d9c9; font-size: .74rem; margin: 8px 0;}
+#decision-buttons button:disabled, .crew-interactions button:disabled {opacity: .42; cursor: default;}
+@media (max-width: 720px) {
+  #interaction-prompt {bottom: 78px; padding: 9px 11px; gap: 10px;}
+  #interaction-label {font-size: .75rem;}
+  #interaction-detail {font-size: .62rem;}
+  .touch-controls #interaction-prompt {bottom: 220px; max-width: calc(100vw - 24px);}
+  .touch-controls #interaction-prompt:has(~ #mobile-controls) {z-index: 3;}
+  .touch-controls #threat-panel:not(.hidden) ~ #interaction-prompt {visibility: hidden;}
+}
+@media (max-height: 500px) and (orientation: landscape) {
+  .touch-controls #interaction-prompt {bottom: 16px; max-width: calc(100vw - 370px);}
+  .touch-controls #interaction-detail {display: none;}
+}
+
+.crew-interactions button small {display:block; margin-top:4px; font-size:.64rem; opacity:.85;}

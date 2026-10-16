@@ -300,6 +300,31 @@ const GameUI = Object.freeze({
     document.getElementById('fx-hallucination').style.opacity =
       sanity < 50 ? (50 - sanity) / 50 * 0.9 : 0;
     GameUI.updateThreat(game);
+    GameUI.updateInteraction(game);
+  },
+
+  updateInteraction(game) {
+    const panel = document.getElementById('interaction-prompt');
+    if (!panel) return;
+    const hidden = game.state !== 'playing' || game.paused || BuildManager.placing;
+    panel.classList.toggle('hidden', hidden);
+    if (hidden) return;
+    const action = game.getInteractionContext();
+    if (!action) { panel.classList.add('hidden'); return; }
+    const stamp = [action.kind, action.label, action.detail, action.available].join('|');
+    if (panel.dataset.context === stamp) return;
+    panel.dataset.context = stamp;
+    panel.classList.toggle('unavailable', !action.available);
+    panel.classList.toggle('destructive', action.kind === 'demolish');
+    document.getElementById('interaction-label').textContent = action.label;
+    document.getElementById('interaction-detail').textContent = action.detail;
+    const button = document.getElementById('btn-context-action');
+    button.disabled = !action.available;
+    button.classList.toggle('hidden', action.key === '');
+    button.setAttribute?.('aria-label', action.label);
+    document.getElementById('interaction-key').textContent = action.kind === 'hook' ? 'Recoger' : 'E';
+    const touch = document.getElementById('mobile-interact');
+    if (touch) touch.textContent = action.kind === 'crew' ? 'Hablar' : action.kind === 'repair' ? 'Reparar' : 'Usar';
   },
 
   updateThreat(game) {

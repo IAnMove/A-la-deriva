@@ -673,6 +673,10 @@ const Game = {
     };
     document.getElementById('close-build').onclick = () => { BuildManager.close(); Game.updateBuildMenu(); };
 
+    const contextButton = document.getElementById('btn-context-action');
+    if (contextButton) contextButton.onclick = () => {
+      if (Game.state === 'playing' && !Game.paused) { Game.interact(); Game.updateUI(); }
+    };
     document.getElementById('btn-crew').onclick = () => {
       Game.paused = true;
       document.getElementById('crew-panel').classList.remove('hidden');
@@ -752,6 +756,10 @@ const Game = {
           Save.save(Game.getSaveData());
         }
         GameUI.updateCrewOverview(Game);
+        Game.renderCrewPanel();
+      },
+      (member, kind) => {
+        Game.interactWithCrew(member, kind);
         Game.renderCrewPanel();
       }
     );
@@ -981,6 +989,7 @@ const Game = {
       return false;
     }
     CrewManager.assignPosition(survivor, Game.raft);
+    CrewManager.signalInteraction?.(survivor, 'welcome', Game.player, 4);
     Game.stats.rescued++;
     Log.add(
       `Has rescatado a ${survivor.name} (${survivor.skill.name}). ` +
@@ -1421,6 +1430,9 @@ const Game = {
 
   showDecision: (title, text, options) => {
     Game.paused = true;
+    if (document.pointerLockElement && typeof document.exitPointerLock === 'function') {
+      document.exitPointerLock();
+    }
     const panel = document.getElementById('decision-panel');
     document.getElementById('decision-title').textContent = title;
     document.getElementById('decision-text').textContent = text;
@@ -1429,6 +1441,7 @@ const Game = {
     for (const opt of options) {
       const b = document.createElement('button');
       b.textContent = opt.label;
+      b.disabled = opt.disabled === true;
       b.onclick = () => {
         panel.classList.add('hidden');
         Game.paused = false;
@@ -1868,8 +1881,21 @@ const Game = {
 
   offerRadioRoute: () => GameSimulation.offerRadioRoute(Game),
 
+  getInteractionContext: () => GameActions.context(Game),
+
+  interactWithCrew: (member, kind) => GameActions.interactWithCrew(Game, member, kind),
+
   interact: () => {
     const p = Game.player;
+    const context = Game.getInteractionContext();
+    if (context?.kind === 'crew') {
+      GameActions.openCrew(Game, context.member);
+      return;
+    }
+    if (p.hook && !Game.raft.selected) {
+      p.hook.returning = true;
+      return;
+    }
 
     // Desmontar celda seleccionada
     if (Game.raft.selected) {
@@ -1908,10 +1934,16 @@ const Game = {
     const efficiency = Game.raft.cellEfficiency(cell);
 
     // Una estructura dañada se repara antes de ejecutar su acción especial.
-    if (cell.health < maxHealth && Game.resources.wood >= 1) {
+    if (cell.health < maxHealth) {
+      if (Game.resources.wood < 1) {
+        Game.showFloatingText(p.x, p.z, 'Necesitas 1 madera para reparar', '#ef5350');
+        return;
+      }
       Game.resources.wood -= 1;
       Game.raft.repairAt(gx, gy, 15);
-      Game.showFloatingText(p.x, p.z, 'Reparado');
+      Game.showFloatingText(p.x, p.z, 'Reparado · ' + Math.ceil(cell.health) + '/' + maxHealth + ' estructura');
+      Particles.emit(p.x, 0.5, p.z, '#d6b17d', 8, 1.2);
+      Game.updateUI();
       AudioSys.play('build');
       return;
     }
@@ -1921,7 +1953,17 @@ const Game = {
       return;
     }
 
-    if (b.key === 'fire' || b.key === 'kitchen') {
+    if (b.key === 'rain' || b.key === 'purifier') {
+      if (p.thirst >= 100) Game.showFloatingText(p.x, p.z, 'Ya has bebido suficiente');
+      else if (Game.resources.water < 0.5) Game.showFloatingText(p.x, p.z, 'Necesitas 0,5 agua', '#ef5350');
+      else {
+        Game.resources.water -= 0.5;
+        p.thirst = Math.min(100, p.thirst + 20 * efficiency);
+        Game.showFloatingText(p.x, p.z, 'Agua bebida · −0,5 agua', '#67d8ff');
+        AudioSys.play('collect');
+        Game.updateUI();
+      }
+    } else if (b.key === 'fire' || b.key === 'kitchen') {
       if (Game.resources.food >= 1) {
         Game.resources.food -= 1;
         const isKitchen = b.key === 'kitchen';
@@ -1973,7 +2015,8 @@ const Game = {
         Game.showFloatingText(p.x, p.z, 'Infección tratada', '#66bb6a');
         Log.add('La enfermería detuvo la infección.');
         AudioSys.play('collect');
-      } else if (Game.resources.cloth >= 1 && Game.player.health < 100) {
+      } else if ((!isInfirmary || Game.infectionDays <= 0) &&
+          Game.resources.cloth >= 1 && Game.player.health < 100) {
         Game.resources.cloth -= 1;
         const healing = Math.round((isInfirmary ? 34 : 25) * efficiency);
         Game.player.health = Math.min(100, Game.player.health + healing);
