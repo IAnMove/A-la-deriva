@@ -915,11 +915,14 @@ const CrewManager = {
   },
 
   // Los GLB originales tienen una pose de brazos abiertos incluso en Idle.
-  // Alineamos el eje longitudinal del hueso conservando su giro para que
+  // Alineamos el eje longitudinal del hueso partiendo de su bindQuat para que
   // descansar, escuchar o sujetar una herramienta tenga una silueta natural.
-  aimLimb: (mesh, rig, name, x, y, z) => {
+  aimLimb: (mesh, rig, name, x, y, z, roll = 0) => {
     const bone = rig.bone?.(name);
     if (!bone?.parent) return;
+    if (bone.userData && bone.userData.bindQuat) {
+      bone.quaternion.copy(bone.userData.bindQuat);
+    }
     const scratch = mesh.userData.poseScratch || (mesh.userData.poseScratch = {
       parentRotation: new THREE.Quaternion(), rootRotation: new THREE.Quaternion(),
       correction: new THREE.Quaternion(), direction: new THREE.Vector3(), axis: new THREE.Vector3()
@@ -931,6 +934,7 @@ const CrewManager = {
     scratch.axis.set(0, 1, 0).applyQuaternion(bone.quaternion).normalize();
     scratch.correction.setFromUnitVectors(scratch.axis, scratch.direction);
     bone.quaternion.premultiply(scratch.correction);
+    if (roll) bone.rotateY(roll);
   },
 
   animateMember: (member, dt, time) => {
@@ -955,33 +959,42 @@ const CrewManager = {
       const clip = walking ? 'Walk' : member.hostile ? 'Reel' : fishing && pulse ? 'Reel' : 'Idle';
       rig.play(clip, { timeScale: member.hostile ? 1.1 : walking ? 0.7 : 0.35 });
       rig.update(dt);
+      rig.resetUpperBody?.();
+      CrewManager.aimLimb(mesh, rig, 'Neck', 0, 0.99, 0.08);
+      const headBone = rig.bone?.('Head');
+      if (headBone?.userData?.bindQuat) {
+        headBone.quaternion.copy(headBone.userData.bindQuat);
+        headBone.rotateX(-0.08);
+      } else {
+        CrewManager.aimLimb(mesh, rig, 'Head', 0, 0.98, 0.15);
+      }
       if (!member.hostile) {
         const swing = walking ? Math.sin(t * 8) * 0.35 : 0;
         const speaking = !!interaction;
-        let rightY = -1, rightZ = 0.06 + swing, leftY = -1, leftZ = 0.06 - swing;
-        if (fishing) { rightY = -0.35; rightZ = 0.9; leftY = -0.5; leftZ = 0.65; }
-        else if (interaction === 'welcome') { rightY = 0.85; rightZ = 0.25 + Math.sin(t * 6) * 0.12; }
-        else if (speaking) { rightY = -0.55; rightZ = 0.6 + Math.sin(t * 2.5) * 0.06; }
+        let rightY = -0.98, rightZ = 0.06 + swing, leftY = -0.98, leftZ = 0.06 - swing;
+        if (fishing) { rightY = -0.55; rightZ = 0.82; leftY = -0.62; leftZ = 0.72; }
+        else if (interaction === 'welcome') { rightY = 0.78; rightZ = 0.32 + Math.sin(t * 6) * 0.12; }
+        else if (speaking) { rightY = -0.62; rightZ = 0.58 + Math.sin(t * 2.5) * 0.06; }
         else if (working && ['repair', 'cook', 'care', 'water', 'navigate'].includes(job)) {
-          rightY = -0.65; rightZ = 0.65 + (pulse ? Math.sin(t * 3) * 0.1 : 0);
+          rightY = -0.68; rightZ = 0.65 + (pulse ? Math.sin(t * 3) * 0.1 : 0);
         }
-        CrewManager.aimLimb(mesh, rig, 'RightArm', 0.08, rightY, rightZ);
-        CrewManager.aimLimb(mesh, rig, 'LeftArm', -0.08, leftY, leftZ);
-        CrewManager.aimLimb(mesh, rig, 'RightForeArm', -0.04, rightY, rightZ + (speaking ? 0.25 : 0));
-        CrewManager.aimLimb(mesh, rig, 'LeftForeArm', 0.04, leftY, leftZ);
+        CrewManager.aimLimb(mesh, rig, 'RightArm', -0.14, rightY, rightZ);
+        CrewManager.aimLimb(mesh, rig, 'LeftArm', 0.14, leftY, leftZ);
+        CrewManager.aimLimb(mesh, rig, 'RightForeArm', -0.06, rightY, rightZ + (speaking ? 0.25 : 0.14), 0.38);
+        CrewManager.aimLimb(mesh, rig, 'LeftForeArm', 0.06, leftY, leftZ + 0.14, -0.38);
         if (!walking && !resting) {
-          CrewManager.aimLimb(mesh, rig, 'RightUpLeg', 0.04, -1, 0.015);
-          CrewManager.aimLimb(mesh, rig, 'LeftUpLeg', -0.04, -1, 0.015);
+          CrewManager.aimLimb(mesh, rig, 'RightUpLeg', -0.04, -1, 0.015);
+          CrewManager.aimLimb(mesh, rig, 'LeftUpLeg', 0.04, -1, 0.015);
           CrewManager.aimLimb(mesh, rig, 'RightLeg', 0, -1, 0);
           CrewManager.aimLimb(mesh, rig, 'LeftLeg', 0, -1, 0);
         }
         if (resting) {
-          CrewManager.aimLimb(mesh, rig, 'RightUpLeg', 0.12, -0.12, 1);
-          CrewManager.aimLimb(mesh, rig, 'LeftUpLeg', -0.12, -0.12, 1);
-          CrewManager.aimLimb(mesh, rig, 'RightLeg', 0.02, -1, 0.12);
-          CrewManager.aimLimb(mesh, rig, 'LeftLeg', -0.02, -1, 0.12);
-          CrewManager.aimLimb(mesh, rig, 'RightForeArm', -0.1, -0.5, 0.65);
-          CrewManager.aimLimb(mesh, rig, 'LeftForeArm', 0.1, -0.5, 0.65);
+          CrewManager.aimLimb(mesh, rig, 'RightUpLeg', -0.12, -0.12, 1);
+          CrewManager.aimLimb(mesh, rig, 'LeftUpLeg', 0.12, -0.12, 1);
+          CrewManager.aimLimb(mesh, rig, 'RightLeg', -0.02, -1, 0.12);
+          CrewManager.aimLimb(mesh, rig, 'LeftLeg', 0.02, -1, 0.12);
+          CrewManager.aimLimb(mesh, rig, 'RightForeArm', 0.08, -0.5, 0.65, 0.35);
+          CrewManager.aimLimb(mesh, rig, 'LeftForeArm', -0.08, -0.5, 0.65, -0.35);
         }
         if (!walking) {
           const feet = ['LeftFoot', 'RightFoot'].map(name => rig.bone?.(name)).filter(Boolean);

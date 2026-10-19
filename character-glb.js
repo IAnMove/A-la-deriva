@@ -43,6 +43,30 @@ const NaufragoGLB = {
 
   // Crea el mezclador y un selector de clips con fundidos suaves.
   createRig: (root, animations) => {
+    root.traverse(obj => {
+      if (obj.isSkinnedMesh && obj.skeleton && typeof obj.skeleton.pose === 'function') {
+        obj.skeleton.pose();
+      }
+    });
+    const bindBones = [];
+    root.traverse(obj => {
+      if (obj.isBone) {
+        obj.userData.bindQuat = obj.quaternion.clone();
+        bindBones.push(obj);
+      }
+    });
+    const upperBodyNames = [
+      'Spine02', 'Spine01', 'Spine',
+      'LeftShoulder', 'RightShoulder',
+      'neck', 'Neck', 'Head',
+      'LeftArm', 'RightArm',
+      'LeftForeArm', 'RightForeArm',
+      'LeftHand', 'RightHand'
+    ];
+    const upperBodyBones = upperBodyNames
+      .map(name => root.getObjectByName(name))
+      .filter(Boolean);
+
     const mixer = new THREE.AnimationMixer(root);
     const actions = {};
     animations.forEach(clip => {
@@ -51,6 +75,7 @@ const NaufragoGLB = {
     const rig = {
       mixer,
       actions,
+      bindBones,
       currentName: null,
       play: (name, opts = {}) => {
         const next = actions[name];
@@ -71,7 +96,15 @@ const NaufragoGLB = {
         rig.currentName = name;
       },
       update: dt => mixer.update(dt),
-      bone: name => root.getObjectByName(name)
+      resetUpperBody: () => {
+        for (let i = 0; i < upperBodyBones.length; i++) {
+          const b = upperBodyBones[i];
+          if (b.userData && b.userData.bindQuat) {
+            b.quaternion.copy(b.userData.bindQuat);
+          }
+        }
+      },
+      bone: name => root.getObjectByName(name) || (name === 'Neck' ? root.getObjectByName('neck') : null)
     };
     return rig;
   },

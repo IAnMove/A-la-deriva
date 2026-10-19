@@ -11,6 +11,10 @@
   - Orientación e hinchado dinámico de la vela (`sail`) y banderolas (`mast` / catavientos) según el ángulo real del viento y el rumbo del timón.
   - Columnas de humo con flotabilidad y deriva por viento en hoguera (`fire`), ahumadero (`smokehouse`), cocina (`kitchen`) y faro (`beacon`), además de lluvia inclinada por el viento.
   - Efecto del ángulo viento-vela sobre la velocidad de navegación en la carta náutica e indicador de viento en el HUD.
+- [x] **Mejora de animaciones GLB del protagonista, tripulación y caña de pescar (`character-glb.js`, `player.js`, `survivor.js`)**
+  - Captura de `bindQuat` real del esqueleto y limpieza por fotograma (`resetUpperBody`) de columna, hombros, cuello, cabeza y muñecas para eliminar las poses retorcidas de los clips exportados.
+  - Corrección del signo lateral y pronación de antebrazos en reposo, marcha y tareas de tripulación.
+  - Rediseño de proporciones y punto de agarre de la caña (`makeRod`), ciclo completo de lance/espera/recogida/lucha a dos manos con flexión por tramos (`setRodFlex`) y alineación del remo entre ambas manos.
 
 ## Próximas mejoras planificadas
 - [ ] **1. Carta náutica visual e interactiva en la mesa de navegación (`chart`)**

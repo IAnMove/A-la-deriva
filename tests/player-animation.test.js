@@ -177,7 +177,9 @@ run(`
   glbPlayerFixture.hook = { x: 3, z: 1, fishing: true };
   PlayerVis.castTime = 99; PlayerVis.lastHook = glbPlayerFixture.hook;
   PlayerVis.sync(glbPlayerFixture, 0.1, 6);
-  var fishingRigPreservedFixture = Math.abs(glbBonesFixture.RightArm.rotation.z + 1.5) < 0.0001;
+  var fishingArmsForwardFixture = limbDirectionFixture('RightForeArm').z > 0.7 &&
+    limbDirectionFixture('LeftForeArm').z > 0.7 &&
+    PlayerVis.rodSegments[2].rotation.x > 0.05;
   glbPlayerFixture.hook = null; PlayerVis.fpMode = true;
   PlayerVis.sync(glbPlayerFixture, 0.1, 7);
   var fpRigPreservedFixture = Math.abs(glbBonesFixture.RightArm.rotation.z + 1.5) < 0.0001;
@@ -189,6 +191,6 @@ assert.equal(run('walkCounterSwingFixture'), true);
 assert.equal(run('paddleVisibleFixture'), true);
 assert.equal(run('paddleForwardFixture'), true);
 assert.equal(run('paddleHiddenFixture'), true);
-assert.equal(run('fishingRigPreservedFixture'), true);
+assert.equal(run('fishingArmsForwardFixture'), true);
 assert.equal(run('fpRigPreservedFixture'), true);
-console.log('✓ GLB: reposo natural, brazos al caminar y palada sin alterar pesca ni primera persona');
+console.log('✓ GLB: reposo natural, brazos al caminar, palada, agarre de pesca y primera persona');
