@@ -1614,3 +1614,74 @@ button.danger { background: linear-gradient(180deg, #ff7043, #d84315); color: #f
 }
 
 .crew-interactions button small {display:block; margin-top:4px; font-size:.64rem; opacity:.85;}
+
+/* Carta náutica interactiva */
+.chart-modal-content {
+  width: min(94vw, 640px);
+  max-width: 640px;
+}
+
+.chart-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-bottom: 10px;
+  padding: 9px 12px;
+  border: 1px solid rgba(103, 216, 255, 0.16);
+  border-radius: 10px;
+  background: rgba(0, 10, 18, 0.36);
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.chart-summary strong {
+  color: var(--text);
+}
+
+.chart-canvas-wrap {
+  margin-bottom: 12px;
+}
+
+#chart-canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid rgba(148, 210, 235, 0.28);
+  border-radius: 12px;
+  background: #081824;
+  box-shadow: inset 0 0 24px rgba(0, 0, 0, 0.55);
+  cursor: crosshair;
+}
+
+.chart-hint {
+  margin: 6px 2px 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-align: center;
+}
+
+.chart-controls {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.chart-controls button {
+  margin: 0;
+  padding: 9px 8px;
+  font-size: 0.76rem;
+  min-height: 40px;
+}
+
+.chart-controls button.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 14px rgba(103, 216, 255, 0.32);
+}
+
+@media (max-width: 640px) {
+  .chart-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+

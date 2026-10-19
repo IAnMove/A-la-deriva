@@ -49,7 +49,7 @@ const GameActions = Object.freeze({
       rudder: ['Cambiar el rumbo', 'Alterna babor, recto y estribor', true],
       motor: [game.resources.fuel < 0.5 ? 'Preparar combustible' : 'Consultar navegación', game.resources.fuel < 0.5 ? '1 plástico → 2 combustible' : 'Vela y timón permiten navegar', game.resources.fuel >= 0.5 || game.resources.plastic >= 1],
       radio: ['Emitir una señal de socorro', 'Consulta los requisitos del rescate', true],
-      chart: ['Consultar la carta', 'Comprueba la distancia a tierra', true],
+      chart: ['Abrir carta náutica', 'Mapa interactivo · estela, corrientes y rumbo', true],
       harpoon: ['Defender la balsa', 'Ahuyenta al tiburón más cercano · desgasta 6 estructura', true],
       containment: ['Comprobar la vigilancia', 'Estado de los tripulantes bajo vigilancia', true],
       rain: ['Beber agua', '0,5 agua · recupera hasta 20 de sed', p.thirst < 100 && game.resources.water >= 0.5],

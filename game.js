@@ -94,6 +94,7 @@ const Game = {
   islandIntelApplied: 0,
   rescueShipBearing: -0.62,
   regions: [],
+  chartTrail: [{ x: 0, z: 0 }],
   currentRegion: null,
   regionBlend: 0,
   rescuedSignal: 0,
@@ -126,6 +127,33 @@ const Game = {
     GameSimulation.getCurrentAt(Game.worldSeed, x, z),
   getWindAt: () => GameSimulation.getWindAt(Game),
   evaluateChartRegion: () => GameSimulation.evaluateChartRegion(Game),
+  getChartSnapshot: () => GameSimulation.getChartSnapshot(Game),
+  setNavigationHeading: (heading) => {
+    const next = GameSimulation.setNavigationHeading(Game, heading);
+    GameUI.renderChartModal(Game);
+    Game.updateUI();
+    return next;
+  },
+  steerFromChartPoint: (targetX, targetZ) => {
+    if (Game.raft.countProvides('rudder') <= 0) return Game.navigationHeading;
+    const next = GameSimulation.setHeadingFromChartTarget(Game, targetX, targetZ);
+    const label = next < -0.15 ? 'babor' : next > 0.15 ? 'estribor' : 'recto';
+    Log.add(`Ajustas el rumbo en la carta náutica hacia ${label}.`);
+    GameUI.renderChartModal(Game);
+    Game.updateUI();
+    return next;
+  },
+  openChartModal: () => {
+    const panel = document.getElementById('chart-panel');
+    if (panel) panel.classList.remove('hidden');
+    Game.paused = true;
+    return GameUI.renderChartModal(Game);
+  },
+  closeChartModal: () => {
+    const panel = document.getElementById('chart-panel');
+    if (panel) panel.classList.add('hidden');
+    Game.paused = false;
+  },
 
   // Meshes auxiliares
   ghostMesh: null,
@@ -412,6 +440,18 @@ const Game = {
       const legacyDist = Util.clamp(finite(data.islandDistance, 300), 0, 10000000);
       GameSimulation.placeOnIslandLine(Game, legacyDist);
     }
+    if (Array.isArray(data.chartTrail) && data.chartTrail.length > 0) {
+      Game.chartTrail = data.chartTrail
+        .filter(pt => pt && Number.isFinite(Number(pt.x)) && Number.isFinite(Number(pt.z)))
+        .slice(0, 160)
+        .map(pt => ({
+          x: Util.clamp(Number(pt.x), -10000000, 10000000),
+          z: Util.clamp(Number(pt.z), -10000000, 10000000)
+        }));
+      if (Game.chartTrail.length === 0) Game.chartTrail = [{ x: 0, z: 0 }];
+    } else {
+      Game.chartTrail = [{ x: 0, z: 0 }];
+    }
     GameSimulation.syncZoneFromChart(Game, true);
     if (!hasChartCoords && ZONES.includes(data.zone) && Game.zone === 'calm') {
       Game.zone = data.zone;
@@ -680,6 +720,9 @@ const Game = {
       islandZ: Game.islandZ,
       islandRevealed: Game.islandRevealed === true,
       islandIntelApplied: Game.islandIntelApplied || 0,
+      chartTrail: (Array.isArray(Game.chartTrail) ? Game.chartTrail : [{ x: 0, z: 0 }])
+        .slice(-160)
+        .map(pt => ({ x: Number(pt.x) || 0, z: Number(pt.z) || 0 })),
       regions: (Game.regions || []).map(r => ({
         id: String(r.id || ''),
         type: String(r.type || 'debris'),
@@ -813,6 +856,36 @@ const Game = {
       Game.paused = false;
     };
 
+    const closeChart = document.getElementById('close-chart');
+    if (closeChart) closeChart.onclick = () => Game.closeChartModal();
+    const btnChartPort = document.getElementById('btn-chart-port');
+    if (btnChartPort) btnChartPort.onclick = () => Game.setNavigationHeading(-1);
+    const btnChartStraight = document.getElementById('btn-chart-straight');
+    if (btnChartStraight) btnChartStraight.onclick = () => Game.setNavigationHeading(0);
+    const btnChartStarboard = document.getElementById('btn-chart-starboard');
+    if (btnChartStarboard) btnChartStarboard.onclick = () => Game.setNavigationHeading(1);
+    const btnChartRoute = document.getElementById('btn-chart-route');
+    if (btnChartRoute) {
+      btnChartRoute.onclick = () => {
+        Game.closeChartModal();
+        Game.offerIslandRoute();
+      };
+    }
+    const chartCanvas = document.getElementById('chart-canvas');
+    if (chartCanvas) {
+      chartCanvas.onclick = e => {
+        const rect = typeof chartCanvas.getBoundingClientRect === 'function'
+          ? chartCanvas.getBoundingClientRect()
+          : { left: 0, top: 0, width: chartCanvas.width || 560, height: chartCanvas.height || 340 };
+        const scaleX = (chartCanvas.width || 560) / Math.max(1, rect.width || 560);
+        const scaleY = (chartCanvas.height || 340) / Math.max(1, rect.height || 340);
+        const px = e?.offsetX != null ? e.offsetX * scaleX : ((e?.clientX || 0) - rect.left) * scaleX;
+        const py = e?.offsetY != null ? e.offsetY * scaleY : ((e?.clientY || 0) - rect.top) * scaleY;
+        const pt = GameUI.canvasToChart(px, py);
+        Game.steerFromChartPoint(pt.x, pt.z);
+      };
+    }
+
     document.getElementById('btn-summary-ok').onclick = () => {
       document.getElementById('day-summary').classList.add('hidden');
       Game.paused = false;
@@ -851,6 +924,8 @@ const Game = {
     document.getElementById('log-panel').classList.add('hidden');
     document.getElementById('decision-panel').classList.add('hidden');
     document.getElementById('day-summary').classList.add('hidden');
+    const chartPanel = document.getElementById('chart-panel');
+    if (chartPanel) chartPanel.classList.add('hidden');
     const conflictPanel = document.getElementById('crew-conflict-panel');
     if (conflictPanel) conflictPanel.classList.add('hidden');
     Game.crewConflict = { active: false };
@@ -863,9 +938,11 @@ const Game = {
   },
 
   menuModalOpen: () => {
+    const chartPanel = document.getElementById('chart-panel');
     return BuildManager.active ||
       !document.getElementById('crew-panel').classList.contains('hidden') ||
-      !document.getElementById('log-panel').classList.contains('hidden');
+      !document.getElementById('log-panel').classList.contains('hidden') ||
+      Boolean(chartPanel && !chartPanel.classList.contains('hidden'));
   },
 
   togglePause: () => {
@@ -2208,6 +2285,7 @@ const Game = {
         : 'Aún no has fijado una ruta a tierra.';
       Game.showFloatingText(p.x, p.z, route, '#4fc3f7');
       Log.add(`La mesa de navegación confirma el rumbo. ${route}`);
+      Game.openChartModal();
     } else if (b.key === 'containment') {
       const restrained = CrewManager.members.filter(member =>
         member.alive && member.restrainedDays > 0

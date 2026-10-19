@@ -18,12 +18,12 @@
 - [x] **Mejora de controles y puesta en escena de la pesca (`hook.js`, `game.js`, `game-renderer.js`, `index.html`)**
   - Soporte de clic izquierdo del ratón y botón dedicado (`#btn-fishing-pull` / `#fishing-panel`) además de `ESPACIO` para tirar durante el forcejeo de pesca.
   - Pez 3D forcejeando bajo la boya con ondas concéntricas durante la picada y salto parabólico 3D fuera del agua con estela de gotas hacia el jugador al completar la captura (`HookVis.launchLeapingFish`).
+- [x] **1. Carta náutica visual e interactiva en la mesa de navegación (`chart`) (`game-simulation.js`, `game-ui.js`, `game-actions.js`, `game.js`, `index.html`, `style.css`)**
+  - Modal de carta en `<canvas>` 2D estilo papel náutico al interactuar con la mesa `chart`.
+  - Dibujo de la estela recorrida desde `(0, 0)`, regiones descubiertas/visitadas, vectores de corriente locales, rosa de los vientos con vector de viento y cono de incertidumbre hacia la isla (o posición fijada).
+  - Selección de rumbo objetivo desde la carta haciendo clic sobre el mapa o mediante los controles de babor, recto y estribor.
 
 ## Próximas mejoras planificadas
-- [ ] **1. Carta náutica visual e interactiva en la mesa de navegación (`chart`)**
-  - Modal de carta en `<canvas>` 2D estilo papel náutico al interactuar con la mesa `chart`.
-  - Dibujo de la estela recorrida desde `(0, 0)`, regiones descubiertas/visitadas, vectores de corriente locales y cono de incertidumbre hacia la isla.
-  - Selección de rumbo objetivo desde la carta para ajustar el timón.
 - [ ] **2. Pecios y boyas explorables como puntos fijos de región**
   - Puntos de interés visibles en el horizonte dentro de regiones `debris` y `ship` (pecios semihundidos, boyas meteorológicas).
   - Exploración por fases al echar el ancla cerca, con relación riesgo/recompensa (piezas únicas de radio, metal, combustible, pistas de navegación).

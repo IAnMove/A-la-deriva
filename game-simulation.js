@@ -243,9 +243,173 @@ const GameSimulation = Object.freeze({
     );
     game.currentRegion = null;
     game.regionBlend = 0;
+    game.chartTrail = [{ x: 0, z: 0 }];
     game.currentVector = GameSimulation.getCurrentAt(normalizedSeed, 0, 0, game);
     game.windOverride = null;
     GameSimulation.getWindAt(game);
+  },
+
+  recordChartTrail(game) {
+    if (!game) return;
+    if (!Array.isArray(game.chartTrail) || game.chartTrail.length === 0) {
+      game.chartTrail = [{ x: 0, z: 0 }];
+    }
+    const cx = Math.round((Number(game.chartX) || 0) * 100) / 100;
+    const cz = Math.round((Number(game.chartZ) || 0) * 100) / 100;
+    const last = game.chartTrail[game.chartTrail.length - 1];
+    if (!last || Math.hypot(cx - last.x, cz - last.z) >= 3.2) {
+      game.chartTrail.push({ x: cx, z: cz });
+      if (game.chartTrail.length > 160) {
+        const origin = game.chartTrail[0] || { x: 0, z: 0 };
+        game.chartTrail = [origin, ...game.chartTrail.slice(-159)];
+      }
+    }
+  },
+
+  setNavigationHeading(game, heading) {
+    if (!game) return 0;
+    const clamped = Util.clamp(
+      Number(heading) || 0,
+      -NAVIGATION_BALANCE.maxHeading,
+      NAVIGATION_BALANCE.maxHeading
+    );
+    game.navigationHeading = Math.round(clamped * 100) / 100;
+    GameSimulation.computeChartVelocity(game);
+    return game.navigationHeading;
+  },
+
+  setHeadingFromChartTarget(game, targetX, targetZ) {
+    if (!game) return 0;
+    const cx = Number(game.chartX) || 0;
+    const cz = Number(game.chartZ) || 0;
+    const tx = Number(targetX);
+    const tz = Number(targetZ);
+    if (!Number.isFinite(tx) || !Number.isFinite(tz)) {
+      return game.navigationHeading || 0;
+    }
+    let refAngle = 0;
+    if (game.victoryCondition === 'island' &&
+        Number.isFinite(game.islandX) && Number.isFinite(game.islandZ)) {
+      const ix = game.islandX - cx;
+      const iz = game.islandZ - cz;
+      if (Math.hypot(ix, iz) > 1) refAngle = Math.atan2(iz, ix);
+    }
+    const dx = tx - cx;
+    const dz = tz - cz;
+    const dist = Math.hypot(dx, dz);
+    if (dist < 1) return game.navigationHeading || 0;
+    const targetAngle = Math.atan2(dz, dx);
+    const deltaAngle = Math.atan2(
+      Math.sin(targetAngle - refAngle),
+      Math.cos(targetAngle - refAngle)
+    );
+    const normalizedHeading = Util.clamp(
+      deltaAngle / 0.52,
+      -NAVIGATION_BALANCE.maxHeading,
+      NAVIGATION_BALANCE.maxHeading
+    );
+    return GameSimulation.setNavigationHeading(game, normalizedHeading);
+  },
+
+  getChartSnapshot(game) {
+    if (!Array.isArray(game.regions) || game.regions.length === 0) {
+      GameSimulation.initChart(game, game.worldSeed);
+    }
+    GameSimulation.recordChartTrail(game);
+    const cx = Number(game.chartX) || 0;
+    const cz = Number(game.chartZ) || 0;
+    const ix = Number.isFinite(Number(game.islandX)) ? Number(game.islandX) : 285;
+    const iz = Number.isFinite(Number(game.islandZ)) ? Number(game.islandZ) : 90;
+    const trail = [
+      ...(Array.isArray(game.chartTrail) ? game.chartTrail : [{ x: 0, z: 0 }]),
+      { x: Math.round(cx * 100) / 100, z: Math.round(cz * 100) / 100 }
+    ];
+    const lookoutBonus = game.raft ? Util.clamp(game.raft.countProvides('lookout'), 0, 2) * 18 : 0;
+    const chartBonus = game.raft ? Util.clamp(game.raft.countProvides('navigation'), 0, 2) * 24 : 0;
+    const discoveryHorizon = 52 + lookoutBonus + chartBonus;
+    const visibleRegions = [];
+    for (const r of game.regions) {
+      if (!r) continue;
+      const dist = Math.hypot(cx - r.x, cz - r.z);
+      if (dist <= r.radius + discoveryHorizon) {
+        r.discovered = true;
+      }
+      if (r.discovered || r.visited) {
+        visibleRegions.push({
+          id: r.id,
+          type: r.type,
+          label: typeof game.zoneName === 'function' ? game.zoneName(r.type) : r.type,
+          x: r.x,
+          z: r.z,
+          radius: r.radius,
+          visited: Boolean(r.visited),
+          discovered: Boolean(r.discovered),
+          active: game.currentRegion?.id === r.id,
+          poi: r.poi || null
+        });
+      }
+    }
+    const revealed = Boolean(game.islandRevealed || game.victoryCondition === 'island');
+    const intel = Math.max(0, Number(game.navigationIntel) || 0);
+    const coneHalfAngle = revealed
+      ? 0.04
+      : Math.max(0.11, 0.38 - Math.min(0.24, intel * 0.0035) - (chartBonus > 0 ? 0.04 : 0));
+    const islandBearingFromOrigin = Math.atan2(iz, ix);
+    const islandBearingFromRaft = Math.atan2(iz - cz, ix - cx);
+    const islandDistance = GameSimulation.getIslandDistance(game);
+
+    const minX = Math.min(-25, cx - 55, ix - 30);
+    const maxX = Math.max(320, cx + 65, ix + 35);
+    const minZ = Math.min(-115, cz - 65, iz - 45);
+    const maxZ = Math.max(115, cz + 65, iz + 45);
+
+    const currents = [];
+    const cols = 5;
+    const rows = 4;
+    for (let col = 0; col < cols; col++) {
+      for (let row = 0; row < rows; row++) {
+        const sx = minX + ((col + 0.5) / cols) * (maxX - minX);
+        const sz = minZ + ((row + 0.5) / rows) * (maxZ - minZ);
+        const cur = GameSimulation.getCurrentAt(game.worldSeed, sx, sz);
+        currents.push({
+          x: Math.round(sx * 10) / 10,
+          z: Math.round(sz * 10) / 10,
+          vx: cur.x,
+          vz: cur.z
+        });
+      }
+    }
+
+    const wind = GameSimulation.getWindAt(game);
+    const anchored = Boolean(
+      game.anchorDeployed && game.raft && game.raft.countProvides('anchor') > 0
+    );
+
+    return {
+      origin: { x: 0, z: 0 },
+      raft: {
+        x: cx,
+        z: cz,
+        vx: Number(game.chartVx) || 0,
+        vz: Number(game.chartVz) || 0,
+        heading: Number(game.navigationHeading) || 0,
+        anchored
+      },
+      trail,
+      regions: visibleRegions,
+      currents,
+      wind,
+      island: {
+        revealed,
+        x: ix,
+        z: iz,
+        distance: islandDistance,
+        bearingFromOrigin: islandBearingFromOrigin,
+        bearingFromRaft: islandBearingFromRaft,
+        coneHalfAngle
+      },
+      bounds: { minX, maxX, minZ, maxZ }
+    };
   },
 
   getIslandDistance(game) {
@@ -431,6 +595,7 @@ const GameSimulation = Object.freeze({
     if (!Array.isArray(game.regions) || game.regions.length === 0) {
       GameSimulation.initChart(game, game.worldSeed);
     }
+    GameSimulation.recordChartTrail(game);
     const evalResult = GameSimulation.evaluateChartRegion(game);
     const prevZone = game.zone;
     const prevRegion = game.currentRegion;

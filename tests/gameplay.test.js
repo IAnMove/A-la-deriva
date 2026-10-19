@@ -2210,4 +2210,70 @@ test('el viento direccional impulsa la vela según el ángulo, arrastra el humo 
   assert.ok(run('smokeEndZFixture') < run('smokeStartZFixture') - 0.1);
 });
 
+test('la mesa de navegación abre la carta náutica interactiva con estela, corrientes y control de rumbo', () => {
+  resetRaft([
+    ['0,0', 'chart', 42],
+    ['1,0', 'rudder', 45],
+    ['0,1', 'sail', 40]
+  ]);
+  run(`
+    Game.state = 'playing';
+    Game.paused = false;
+    Game.anchorDeployed = false;
+    Game.victoryCondition = null;
+    Game.initChart(424242);
+    Game.navigationHeading = 0;
+    Game.resetPlayerState({ x: 1, z: 1 });
+    Game.raft.selected = null;
+    Game.player.hook = null;
+
+    for (let step = 0; step < 8; step++) {
+      Game.updateEntities(1.5);
+    }
+    var trailLengthAfterDriftFixture = Game.chartTrail.length;
+
+    Game.interact();
+    var chartModalVisibleFixture =
+      !document.getElementById('chart-panel').classList.contains('hidden');
+    var chartPausedFixture = Game.paused;
+    var snapshotFixture = GameUI.lastChartSnapshot;
+    var summaryHtmlFixture = document.getElementById('chart-summary').innerHTML;
+
+    var portSteeredHeadingFixture = Game.steerFromChartPoint(
+      Game.chartX + 40,
+      Game.chartZ - 30
+    );
+    var starboardSteeredHeadingFixture = Game.steerFromChartPoint(
+      Game.chartX + 40,
+      Game.chartZ + 30
+    );
+
+    var canvasPtFixture = GameUI.chartToCanvas(120, -25);
+    var roundTripChartPtFixture = GameUI.canvasToChart(
+      canvasPtFixture.px,
+      canvasPtFixture.py
+    );
+
+    Game.closeChartModal();
+    var chartClosedFixture =
+      document.getElementById('chart-panel').classList.contains('hidden');
+    var unpausedAfterCloseFixture = !Game.paused;
+  `);
+  assert.ok(run('trailLengthAfterDriftFixture') >= 2);
+  assert.equal(run('chartModalVisibleFixture'), true);
+  assert.equal(run('chartPausedFixture'), true);
+  assert.ok(run('snapshotFixture.currents.length') >= 12);
+  assert.ok(run('snapshotFixture.regions.length') >= 1);
+  assert.ok(run('snapshotFixture.island.coneHalfAngle') > 0.05);
+  assert.match(run('summaryHtmlFixture'), /Posición:/);
+  assert.match(run('summaryHtmlFixture'), /Derrota:/);
+  assert.ok(run('portSteeredHeadingFixture') < -0.2);
+  assert.ok(run('starboardSteeredHeadingFixture') > 0.2);
+  assert.ok(Math.abs(run('roundTripChartPtFixture.x') - 120) < 1e-4);
+  assert.ok(Math.abs(run('roundTripChartPtFixture.z') - (-25)) < 1e-4);
+  assert.equal(run('chartClosedFixture'), true);
+  assert.equal(run('unpausedAfterCloseFixture'), true);
+});
+
+
 

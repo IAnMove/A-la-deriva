@@ -287,6 +287,27 @@
       </div>
     </div>
 
+    <!-- Carta náutica interactiva -->
+    <div id="chart-panel" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="chart-title">
+      <div class="modal-content wide chart-modal-content">
+        <div class="modal-header">
+          <h3 id="chart-title">Carta náutica</h3>
+          <button class="close-btn" id="close-chart" aria-label="Cerrar carta náutica">✕</button>
+        </div>
+        <div id="chart-summary" class="chart-summary"></div>
+        <div class="chart-canvas-wrap">
+          <canvas id="chart-canvas" width="560" height="340" aria-label="Mapa de navegación oceánica"></canvas>
+          <p class="chart-hint">Haz clic sobre el mapa o usa los controles inferiores para orientar el timón.</p>
+        </div>
+        <div class="chart-controls">
+          <button id="btn-chart-port" type="button">↶ Virar a babor</button>
+          <button id="btn-chart-straight" type="button">↑ Mantener recto</button>
+          <button id="btn-chart-starboard" type="button">↷ Virar a estribor</button>
+          <button id="btn-chart-route" type="button">⛵ Fijar ruta a la isla</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Tooltip -->
     <div id="tooltip"></div>
 
