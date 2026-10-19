@@ -57,6 +57,8 @@ const World = {
   lightning: 0,
   hullFoam: null,
   hullFoamRect: { hx: -1, hz: -1, signature: null },
+  deckWash: null,
+  deckWashRect: { hx: -1, hz: -1, signature: null },
   seaUniforms: null,
 
   // Paletas por franja horaria [cielo, niebla, agua, sol, intensidadSol, ambient]
@@ -246,75 +248,219 @@ const World = {
     World.renderer.setSize(window.innerWidth, window.innerHeight);
   },
 
-  // Las ondas grandes conservan su malla económica; el rizado y el reflejo
-  // rasante se resuelven por fragmento, sin texturas ni otra pasada de escena.
+  // Las ondas grandes conservan su malla económica; el rizado, la dispersión
+  // Las ondas grandes conservan su malla económica; el relieve orgánico con
+  // domain-warping, las normales analíticas continuas (sin facetas de rejilla
+  // ni halo bajo la balsa), la dispersión subsuperficial y la espuma fina se
+  // calculan por fragmento a 60 FPS.
   createSeaMaterial: () => {
     const uniforms = World.seaUniforms = {
       seaTime: { value: 0 },
       seaStorm: { value: 0 },
       seaOffset: { value: new THREE.Vector2() },
+      seaWind: { value: new THREE.Vector2(1, 0) },
       seaSky: { value: new THREE.Color(0x4a90d9) },
+      seaDeep: { value: new THREE.Color(0x06263f) },
+      seaLight: { value: new THREE.Color(0x1b6d96) },
+      seaScatter: { value: new THREE.Color(0x22b5bf) },
+      seaFoam: { value: new THREE.Color(0xf0f9ff) },
     };
     const material = new THREE.MeshPhongMaterial({
       color: 0xffffff,
       vertexColors: true,
-      shininess: 175,
-      specular: 0x405564,
+      shininess: 140,
+      specular: 0x3b627b,
       flatShading: false,
     });
     material.onBeforeCompile = shader => {
       Object.assign(shader.uniforms, uniforms);
       shader.vertexShader = shader.vertexShader
-        .replace('#include <common>', '#include <common>\nvarying vec3 vSeaWorld;')
-        .replace('#include <worldpos_vertex>',
-          '#include <worldpos_vertex>\nvSeaWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;');
-      shader.fragmentShader = shader.fragmentShader
         .replace('#include <common>', `#include <common>
           varying vec3 vSeaWorld;
+          varying vec3 vViewBasisX;
+          varying vec3 vViewBasisY;
+          varying vec3 vViewBasisZ;
           uniform float seaTime;
           uniform float seaStorm;
           uniform vec2 seaOffset;
+        `)
+        .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
+          vSeaWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;
+          vViewBasisX = (viewMatrix * vec4(1.0, 0.0, 0.0, 0.0)).xyz;
+          vViewBasisY = (viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz;
+          vViewBasisZ = (viewMatrix * vec4(0.0, 0.0, 1.0, 0.0)).xyz;
+        `);
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', `#include <common>
+          varying vec3 vSeaWorld;
+          varying vec3 vViewBasisX;
+          varying vec3 vViewBasisY;
+          varying vec3 vViewBasisZ;
+          uniform float seaTime;
+          uniform float seaStorm;
+          uniform vec2 seaOffset;
+          uniform vec2 seaWind;
           uniform vec3 seaSky;
+          uniform vec3 seaDeep;
+          uniform vec3 seaLight;
+          uniform vec3 seaScatter;
+          uniform vec3 seaFoam;
+
+          // Hash y ruido 2D suave sin texturas: rompe toda periodicidad lineal
+          // para que las olas tengan crestas curvas en media luna, sin cuadrícula.
+          float seaHash(vec2 p) {
+            vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+            p3 += dot(p3, p3.yzx + 33.33);
+            return fract((p3.x + p3.y) * p3.z);
+          }
+
+          float seaNoise(vec2 p) {
+            vec2 i = floor(p);
+            vec2 f = fract(p);
+            vec2 u = f * f * (3.0 - 2.0 * f);
+            return mix(
+              mix(seaHash(i), seaHash(i + vec2(1.0, 0.0)), u.x),
+              mix(seaHash(i + vec2(0.0, 1.0)), seaHash(i + vec2(1.0, 1.0)), u.x),
+              u.y
+            );
+          }
+
+          // Campo de olas orgánicas: los trenes viajan alineados con el viento y
+          // se curvan mediante ruido 2D no periódico para evitar rombos y puntos.
+          vec4 evalOceanField(vec2 ocean, float t, vec2 windDir, float storm) {
+            vec2 windCross = vec2(-windDir.y, windDir.x);
+            float speed = 1.25 + storm * 0.30;
+            float ts = t * speed;
+
+            // Coordenadas locales orientadas con el viento (x = avance, y = a lo largo de la cresta)
+            vec2 uv = vec2(dot(ocean, windDir), dot(ocean, windCross));
+
+            // Deformación espacial 2D aperiódica (domain warp)
+            float nLarge = seaNoise(uv * vec2(0.11, 0.07) - vec2(ts * 0.18, ts * 0.05));
+            float nMed = seaNoise(uv * vec2(0.24, 0.16) + vec2(-ts * 0.28, ts * 0.11));
+            vec2 warp = vec2(
+              (nLarge - 0.5) * 3.4 + (nMed - 0.5) * 1.6,
+              (nMed - 0.5) * 2.8 - (nLarge - 0.5) * 1.9
+            );
+            vec2 wuv = uv + warp;
+
+            // Envolventes en media luna: cada ola nace, crece y muere lateralmente
+            float env1 = 0.55 + 0.70 * seaNoise(vec2(wuv.x * 0.08 - ts * 0.15, wuv.y * 0.14 + 4.1));
+            float env2 = 0.50 + 0.75 * seaNoise(vec2(wuv.x * 0.13 - ts * 0.22, wuv.y * 0.19 - 7.3));
+            float env3 = 0.45 + 0.80 * seaNoise(vec2(wuv.x * 0.22 - ts * 0.34, wuv.y * 0.28 + 11.7));
+
+            // Tren 1: mar de fondo principal (ligeramente sesgado +11°)
+            float p1 = wuv.x * 0.62 + wuv.y * 0.12 - ts * 2.15;
+            float s1 = sin(p1), c1 = cos(p1);
+            float w1 = (s1 + 0.36 * (s1 * s1 - 0.5)) * env1;
+
+            // Tren 2: oleaje secundario (-14°, nunca ortogonal para no crear cuadrícula)
+            float p2 = wuv.x * 0.94 - wuv.y * 0.23 - ts * 2.85 + nLarge * 2.2;
+            float s2 = sin(p2), c2 = cos(p2);
+            float w2 = (s2 + 0.38 * (s2 * s2 - 0.5)) * env2;
+
+            // Tren 3: olas cortas de viento (+8°)
+            float p3 = wuv.x * 1.58 + wuv.y * 0.22 - ts * 3.75 + nMed * 2.6;
+            float s3 = sin(p3), c3 = cos(p3);
+            float w3 = (s3 + 0.34 * (s3 * s3 - 0.5)) * env3;
+
+            // Tren 4: rizado vivo de superficie
+            float nFine = seaNoise(wuv * vec2(0.85, 0.42) - vec2(ts * 0.75, 0.0));
+            float p4 = wuv.x * 2.75 - wuv.y * 0.48 - ts * 4.80 + nFine * 3.1;
+            float s4 = sin(p4), c4 = cos(p4);
+
+            float h = w1 * 0.44 + w2 * 0.30 + w3 * 0.18 + s4 * 0.08;
+
+            // Derivadas locales respecto a (uv.x, uv.y) y proyección al mundo
+            float d1 = c1 * (1.0 + 0.72 * s1) * env1 * 0.44;
+            float d2 = c2 * (1.0 + 0.76 * s2) * env2 * 0.30;
+            float d3 = c3 * (1.0 + 0.68 * s3) * env3 * 0.18;
+            float d4 = c4 * 0.08;
+
+            float dfdx = d1 * 0.62 + d2 * 0.94 + d3 * 1.58 + d4 * 2.75;
+            float dfdy = d1 * 0.12 - d2 * 0.23 + d3 * 0.22 - d4 * 0.48;
+            vec2 grad = windDir * dfdx + windCross * dfdy;
+
+            // Espuma celular estirada a lo largo de la cresta (sin puntos redondos)
+            float foamA = seaNoise(wuv * vec2(1.45, 0.55) - vec2(ts * 0.65, 0.15));
+            float foamB = seaNoise(wuv * vec2(3.10, 1.15) - vec2(ts * 1.05, -0.35));
+            float foamLace = foamA * (0.45 + 0.55 * foamB);
+
+            // Solo la cara delantera de la cresta (pendiente de barlovento) rompe en espuma
+            float frontFace = smoothstep(-0.15, 0.55, -dfdx);
+            return vec4(grad.x, grad.y, h, foamLace * (0.55 + 0.45 * frontFace));
+          }
+        `)
+        .replace('#include <color_fragment>', `#include <color_fragment>
+          vec2 oceanPos = vSeaWorld.xz + seaOffset;
+          vec2 wDir = length(seaWind) > 0.001 ? normalize(seaWind) : vec2(1.0, 0.15);
+          vec4 seaField = evalOceanField(oceanPos, seaTime, wDir, seaStorm);
+          float waveH = seaField.z;
+          float foamLace = seaField.w;
+          float steepness = length(seaField.xy);
+
+          // Gradiente continuo valle -> lomo con profundidad rica en los senos
+          float depthT = clamp((waveH + 0.55) * 0.84, 0.0, 1.0);
+          depthT = depthT * depthT * (3.0 - 2.0 * depthT);
+          vec3 waterCol = mix(seaDeep, seaLight, depthT);
+
+          // Dispersión subsuperficial turquesa (SSS) en las crestas iluminadas
+          float sssMask = smoothstep(0.06, 0.52, waveH) * smoothstep(0.15, 0.72, steepness);
+          waterCol = mix(waterCol, seaScatter, sssMask * mix(0.52, 0.34, seaStorm));
+
+          // Rompientes en media luna: espuma orgánica en el filo de la cresta
+          float crestMetric = waveH * 0.78 + steepness * 0.26;
+          float breakTh = mix(0.58, 0.40, seaStorm);
+          float whitecap = smoothstep(breakTh, breakTh + 0.22, crestMetric + (foamLace - 0.45) * 0.24)
+            * smoothstep(0.28, 0.72, foamLace);
+          float trailingFoam = smoothstep(breakTh - 0.16, breakTh + 0.08, crestMetric)
+            * smoothstep(0.52, 0.84, foamLace) * mix(0.25, 0.48, seaStorm);
+          float foamTotal = clamp(whitecap * mix(0.78, 0.96, seaStorm) + trailingFoam, 0.0, 0.92);
+          diffuseColor.rgb = mix(waterCol, seaFoam, foamTotal);
         `)
         .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
-          vec2 ocean = vSeaWorld.xz + seaOffset;
-          // Trenes oblicuos: el patrón viaja con las mismas corrientes que
-          // las ondas grandes, sin cuadrícula de ruido ni textura repetida.
-          float rippleA = cos(dot(ocean, vec2(4.1, 1.7)) + seaTime * 2.8);
-          float rippleB = cos(dot(ocean, vec2(-2.3, 5.2)) + seaTime * 3.9);
-          float rippleC = cos(dot(ocean, vec2(8.2, -3.1)) - seaTime * 4.2);
-          float distanceFade = 1.0 - smoothstep(14.0, 65.0, length(vViewPosition));
-          vec2 ripple = (vec2(0.09, 0.038) * rippleA +
-            vec2(-0.042, 0.088) * rippleB + vec2(0.018, -0.012) * rippleC)
-            * distanceFade * (1.0 + seaStorm * 0.4);
-          normal = normalize(normal + mat3(viewMatrix) * vec3(-ripple.x, 0.0, -ripple.y));
+          // Micro-rizado orgánico usando ruido aperiódico (sin líneas de rejilla)
+          vec2 wCross = vec2(-wDir.y, wDir.x);
+          vec2 localUv = vec2(dot(oceanPos, wDir), dot(oceanPos, wCross));
+          float microA = seaNoise(localUv * vec2(1.9, 0.9) - vec2(seaTime * 1.4, 0.2)) - 0.5;
+          float microB = seaNoise(localUv * vec2(3.6, 1.7) - vec2(seaTime * 2.1, -0.5)) - 0.5;
+          float distFade = 1.0 - smoothstep(16.0, 70.0, length(vViewPosition));
+          vec2 slope = seaField.xy * (0.68 + seaStorm * 0.30) +
+            (wDir * (microA * 0.16 + microB * 0.10) + wCross * (microB * 0.12)) * distFade;
+          vec3 worldN = normalize(vec3(-slope.x, 1.0, -slope.y));
+          normal = normalize(vViewBasisX * worldN.x + vViewBasisY * worldN.y + vViewBasisZ * worldN.z);
         `)
         .replace('#include <envmap_fragment>', `#include <envmap_fragment>
           float facing = clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0);
-          float fresnel = 0.035 + 0.46 * pow(1.0 - facing, 3.0);
-          outgoingLight = mix(outgoingLight, seaSky * 0.82, fresnel);
+          float fresnel = 0.03 + 0.46 * pow(1.0 - facing, 3.4);
+          float microGlint = pow(max(0.0, 1.0 - facing), 5.0) * (0.10 - 0.04 * seaStorm);
+          outgoingLight = mix(outgoingLight, seaSky * 0.84, fresnel) + seaSky * microGlint;
         `);
     };
-    material.customProgramCacheKey = () => 'ocean-ripples-fresnel-v1';
+    material.customProgramCacheKey = () => 'ocean-ripples-fresnel-v5';
     return material;
   },
 
-  // Altura de ola en una posición del mundo (para balanceo de balsa/objetos).
-  // Son trenes de olas direccionales que viajan (longitudes de 17/11/7/4,5 u,
-  // varias olas visibles a la vez desde la cámara), todos muestreables por la
-  // malla (vértice cada 1,25 u). Nada de productos de senos de alta
-  // frecuencia: con la rejilla aliasaban y dibujaban patrones rectangulares.
+  // Altura de ola en una posición del mundo (para balanceo de balsa/objetos y
+  // desplazamiento macro de la malla). Usa longitudes largas y suaves para que
+  // la rejilla de 1,25 u nunca forme picos angulosos ni facetas cuadradas.
   waveHeight: (x, z, time, offsetX, offsetZ) => {
     const wx = x + offsetX, wz = z + offsetZ;
-    return Math.sin(wx * 0.34 + wz * 0.1 + time * 1.15) * 0.42 +
-           Math.sin(wx * -0.22 + wz * 0.52 + time * 1.5) * 0.28 +
-           Math.sin(wx * 0.75 - wz * 0.55 + time * 2.1) * 0.16 +
-           Math.sin(wx * 1.25 + wz * 0.9 + time * 2.9) * 0.08;
+    const p1 = wx * 0.29 + wz * 0.11 + time * 1.65;
+    const s1 = Math.sin(p1), c1 = Math.cos(p1);
+    const qx = wx + c1 * 0.85, qz = wz + s1 * 0.65;
+    const p2 = qx * -0.19 + qz * 0.37 + time * 2.05;
+    const s2 = Math.sin(p2);
+    const p3 = qx * 0.52 - qz * 0.31 + time * 2.65;
+    const s3 = Math.sin(p3);
+    const groupEnvelope = 0.88 + 0.16 * Math.sin(wx * 0.065 - wz * 0.048 + time * 0.42);
+    return (s1 * 0.44 + s2 * 0.31) * groupEnvelope + s3 * 0.18;
   },
 
   // Colores del agua derivados de la hora del día (los fija updateDayNight)
   waterDeep: new THREE.Color(0x0a3a5e),
   waterLight: new THREE.Color(0x2a8ac8),
+  waterScatter: new THREE.Color(0x1fa8b8),
   foamColor: new THREE.Color(0xeaf6ff),
   phaseSky: new THREE.Color(0),
   phaseSkyTarget: new THREE.Color(0),
@@ -341,8 +487,8 @@ const World = {
   seaSurfaceHeight: (x, z, time, offsetX, offsetZ, storm, raftRect, rawHeight) => {
     const h = rawHeight === undefined
       ? World.waveHeight(x, z, time, offsetX, offsetZ) : rawHeight;
-    const crest = Math.max(0, h - (storm ? 0.5 : 0.38));
-    let y = (h + crest * crest * (storm ? 0.9 : 0.65)) * World.waveAmp;
+    const crest = Math.max(0, h - (storm ? 0.42 : 0.34));
+    let y = (h + crest * crest * (storm ? 0.88 : 0.65)) * World.waveAmp;
     if (!raftRect) return y;
     const margin = 1.85;
     if (Math.abs(x - raftRect.cx) > raftRect.hx + margin ||
@@ -528,6 +674,179 @@ const World = {
     if (refreshDetail || rebuilt) colors.needsUpdate = true;
   },
 
+  // Lenguas de agua y espuma que trepan por la borda y bañan los tablones
+  // exteriores cuando las olas crecen o hay temporal, sin alterar seaSurfaceHeight.
+  buildDeckWash: (hx, hz, raft = null) => {
+    const edges = [];
+    const addEdges = (x0, z0, x1, z1, occupied) => {
+      if (!occupied(0, -1)) edges.push([x0, z0, x1, z0, 0, -1]);
+      if (!occupied(1, 0)) edges.push([x1, z0, x1, z1, 1, 0]);
+      if (!occupied(0, 1)) edges.push([x1, z1, x0, z1, 0, 1]);
+      if (!occupied(-1, 0)) edges.push([x0, z1, x0, z0, -1, 0]);
+    };
+    if (raft && raft.grid) {
+      const cs = raft.cellSize;
+      for (const key of raft.grid.keys()) {
+        const [gx, gz] = key.split(',').map(Number);
+        addEdges(
+          gx * cs,
+          gz * cs,
+          (gx + 1) * cs,
+          (gz + 1) * cs,
+          (dx, dz) => raft.grid.has((gx + dx) + ',' + (gz + dz))
+        );
+      }
+    } else {
+      addEdges(-hx, -hz, hx, hz, () => false);
+    }
+    const positions = [], colors = [], metadata = [], indices = [];
+    // Anillos hacia el interior de la cubierta (negativo = labio exterior, positivo = sobre tablones)
+    const inwardRings = [-0.05, 0.14, 0.42, 0.78];
+    const across = [-0.5, -0.18, 0.18, 0.5];
+    for (const edge of edges) {
+      const [x0, z0, x1, z1, nx, nz] = edge;
+      const length = Math.hypot(x1 - x0, z1 - z0);
+      const segments = Math.max(1, Math.ceil(length / 1.0));
+      for (let segment = 0; segment < segments; segment++) {
+        const start = positions.length / 3;
+        const phase = x0 * 1.93 + z0 * 2.11 + segment * 2.73 - nx * 0.9 + nz * 0.6;
+        const width = (length / segments) * (0.82 + 0.1 * Math.cos(phase));
+        const midpoint = (segment + 0.5) / segments;
+        for (let column = 0; column < across.length; column++) {
+          const along = midpoint + (across[column] * width) / length;
+          const arch = column === 1 || column === 2 ? 1.08 : 0.45;
+          for (let row = 0; row < inwardRings.length; row++) {
+            const baseInward = inwardRings[row] * (row > 0 ? arch : 1);
+            const px = x0 + (x1 - x0) * along;
+            const pz = z0 + (z1 - z0) * along;
+            positions.push(px - nx * baseInward, 0.37, pz - nz * baseInward);
+            colors.push(1, 1, 1, 0);
+            metadata.push(px, pz, nx, nz, phase, row, column, baseInward);
+          }
+        }
+        for (let column = 0; column < 3; column++) {
+          for (let row = 0; row < 3; row++) {
+            const a = start + column * 4 + row, b = a + 4;
+            indices.push(a, b, a + 1, b, b + 1, a + 1);
+          }
+        }
+      }
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 4));
+    geometry.setIndex(indices);
+    geometry.userData.meta = new Float32Array(metadata);
+    geometry.userData.edgeCount = edges.length;
+    const material = new THREE.MeshBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.name = 'deck-wash';
+    mesh.renderOrder = 3;
+    mesh.frustumCulled = false;
+    return mesh;
+  },
+
+  updateDeckWash: (raftRect, time, offsetX, offsetZ, storm) => {
+    if (!raftRect || !World.scene || typeof THREE.BufferGeometry !== 'function') {
+      if (World.deckWash) World.deckWash.visible = false;
+      return;
+    }
+    const signature = World.footprintSignature(raftRect);
+    const cached = World.deckWashRect;
+    if (!World.deckWash || cached.signature !== signature || cached.raft !== raftRect.raft) {
+      if (World.deckWash) {
+        World.scene.remove(World.deckWash);
+        World.deckWash.geometry.dispose();
+        World.deckWash.material.dispose();
+      }
+      World.deckWash = World.buildDeckWash(raftRect.hx, raftRect.hz, raftRect.raft);
+      World.scene.add(World.deckWash);
+      cached.signature = signature;
+      cached.raft = raftRect.raft;
+    }
+    const mesh = World.deckWash;
+    mesh.visible = true;
+    const raft = raftRect.raft;
+    const group = raft && raft.group;
+    if (group) group.updateMatrixWorld(true);
+    const matrix = group && group.matrixWorld.elements;
+    const deck = raft && Number.isFinite(raft.deckHeight) ? raft.deckHeight : 0.35;
+    const windVec = World.seaUniforms?.seaWind?.value;
+    const windX = Number.isFinite(windVec?.x) ? windVec.x : 1;
+    const windZ = Number.isFinite(windVec?.y) ? windVec.y : 0;
+    const windLen = Math.hypot(windX, windZ) || 1;
+    const wnx = windX / windLen;
+    const wnz = windZ / windLen;
+    const swellFactor = Util.clamp((World.waveAmp - 0.36) / 0.44, 0, 1);
+
+    const positions = mesh.geometry.attributes.position;
+    const colors = mesh.geometry.attributes.color;
+    const meta = mesh.geometry.userData.meta;
+    const foam = World.foamColor;
+    const scatter = World.waterScatter;
+
+    for (let i = 0; i < positions.count; i++) {
+      const idx = i * 8;
+      const edgeX = meta[idx];
+      const edgeZ = meta[idx + 1];
+      const nx = meta[idx + 2];
+      const nz = meta[idx + 3];
+      const phase = meta[idx + 4];
+      const row = meta[idx + 5];
+      const column = meta[idx + 6];
+      const baseInward = meta[idx + 7];
+
+      // Evaluamos la cresta que golpea justo por fuera de la borda
+      const sampleX = (matrix ? matrix[0] * edgeX + matrix[8] * edgeZ + matrix[12] : edgeX + (raft ? 0 : raftRect.cx)) + nx * 0.48;
+      const sampleZ = (matrix ? matrix[2] * edgeX + matrix[10] * edgeZ + matrix[14] : edgeZ + (raft ? 0 : raftRect.cz)) + nz * 0.48;
+      const h = World.waveHeight(sampleX, sampleZ, time, offsetX, offsetZ);
+
+      // Las bordas enfrentadas al viento/oleaje reciben más embate
+      const windExposure = Math.max(0, -(nx * wnx + nz * wnz));
+      const sloshWave = Math.sin(time * 2.15 + phase) * 0.24 + Math.cos(time * 1.35 - phase * 0.7) * 0.14;
+      const climbThreshold = storm ? -0.08 : (0.24 - windExposure * 0.12 - swellFactor * 0.08);
+      const rawSurge = (h + sloshWave + windExposure * 0.18 - climbThreshold) / (storm ? 0.62 : 0.52);
+      const surge = Util.clamp(rawSurge, 0, 1);
+      const surgeSmooth = surge * surge * (3 - 2 * surge);
+
+      // La lengua de agua avanza sobre los tablones al subir la ola y se retira al bajar
+      const reachScale = (storm ? 1.28 : 0.78 + swellFactor * 0.35) * (0.12 + 0.88 * surgeSmooth);
+      const inward = baseInward >= 0 ? baseInward * reachScale : baseInward;
+      const lateralSlosh = row > 0 ? Math.cos(time * 1.9 + phase) * 0.05 * row * surgeSmooth : 0;
+      const lx = edgeX - nx * inward - nz * lateralSlosh;
+      const lz = edgeZ - nz * inward + nx * lateralSlosh;
+      // Altura local sobre la cubierta: labio curvado en la borda y lámina fina sobre la madera
+      const lipLift = row === 0 ? 0.032 * surgeSmooth : row === 1 ? 0.044 * surgeSmooth : 0.018 + 0.014 * surgeSmooth;
+      const ly = deck + lipLift;
+
+      if (matrix) {
+        const wx = matrix[0] * lx + matrix[4] * ly + matrix[8] * lz + matrix[12];
+        const wy = matrix[1] * lx + matrix[5] * ly + matrix[9] * lz + matrix[13];
+        const wz = matrix[2] * lx + matrix[6] * ly + matrix[10] * lz + matrix[14];
+        positions.setXYZ(i, wx, wy, wz);
+      } else {
+        positions.setXYZ(i, lx + (raft ? 0 : raftRect.cx), ly, lz + (raft ? 0 : raftRect.cz));
+      }
+
+      const endFade = column === 0 || column === 3 ? 0 : 1;
+      const rowAlpha = row === 1 ? 0.78 : row === 2 ? 0.95 : 0;
+      const alpha = endFade * rowAlpha * surgeSmooth * (storm ? 0.74 : 0.52);
+      // El cuerpo de la lengua es agua turquesa aireada y el labio interior es espuma blanca
+      const foamMix = row >= 2 ? 0.92 : 0.58;
+      const r = scatter.r + (foam.r - scatter.r) * foamMix;
+      const g = scatter.g + (foam.g - scatter.g) * foamMix;
+      const b = scatter.b + (foam.b - scatter.b) * foamMix;
+      colors.setXYZW(i, r, g, b, alpha);
+    }
+    positions.needsUpdate = true;
+    colors.needsUpdate = true;
+  },
+
   updateSea: (time, offsetX, offsetZ, storm, raftRect = null) => {
     const cam = World.camTarget;
     if (World.seaUniforms) {
@@ -551,7 +870,7 @@ const World = {
     World.seaLastRaft = raftRect && raftRect.raft;
     World.seaLastSurfaceTime = time;
 
-    const targetAmp = storm ? 0.8 : 0.55;
+    const targetAmp = storm ? 0.85 : 0.58;
     const surfaceStep = timeReset || surfaceElapsed <= 0
       ? World.SEA_SURFACE_INTERVAL
       : Math.min(surfaceElapsed, 0.1);
@@ -571,34 +890,33 @@ const World = {
 
     const pos = World.seaGeo.attributes.position;
     const colAttr = World.seaGeo.attributes.color;
-    const deep = World.waterDeep, light = World.waterLight, foam = World.foamColor;
-    const foamTh = storm ? 0.6 : 0.78;
+    const waveAmp = World.waveAmp;
+    const crestTh = storm ? 0.42 : 0.34;
+    const crestMul = storm ? 0.88 : 0.65;
+    const hasRaft = Boolean(raftRect);
+    const margin = 1.85;
+    const minRx = hasRaft ? raftRect.cx - raftRect.hx - margin : 0;
+    const maxRx = hasRaft ? raftRect.cx + raftRect.hx + margin : 0;
+    const minRz = hasRaft ? raftRect.cz - raftRect.hz - margin : 0;
+    const maxRz = hasRaft ? raftRect.cz + raftRect.hz + margin : 0;
+
     for (let i = 0; i < pos.count; i++) {
       const x = pos.getX(i) + cam.x;
       const z = pos.getZ(i) + cam.z;
       const h = World.waveHeight(x, z, time, offsetX, offsetZ);
-      pos.setY(i, World.seaSurfaceHeight(x, z, time, offsetX, offsetZ, storm, raftRect, h));
+      if (hasRaft && x >= minRx && x <= maxRx && z >= minRz && z <= maxRz) {
+        pos.setY(i, World.seaSurfaceHeight(x, z, time, offsetX, offsetZ, storm, raftRect, h));
+      } else {
+        const crest = h > crestTh ? h - crestTh : 0;
+        pos.setY(i, (h + crest * crest * crestMul) * waveAmp);
+      }
 
       if (!refreshDetail) continue;
-      // Gradiente valle -> cresta, estirado para dar contraste: los valles
-      // caen al color profundo y las crestas llegan al claro (con el rango
-      // lineal anterior casi todo quedaba en el tono medio y el mar se
-      // lavaba, sobre todo a mediodía).
-      const t = Util.clamp((h + 0.6) * 0.75, 0, 1);
-      let r = deep.r + (light.r - deep.r) * t;
-      let g = deep.g + (light.g - deep.g) * t;
-      let b = deep.b + (light.b - deep.b) * t;
-      // Espuma en las crestas (vetas direccionales para que sean parches)
-      if (h > foamTh) {
-        const sparkle = 0.5 + 0.5 * Math.sin(
-          (x + offsetX) * 0.62 - (z + offsetZ) * 0.38 + time * 1.1
-        );
-        const f = Math.min(1, (h - foamTh) / 0.2) * sparkle * (storm ? 0.75 : 0.4);
-        r += (foam.r - r) * f;
-        g += (foam.g - g) * f;
-        b += (foam.b - b) * f;
-      }
-      colAttr.setXYZ(i, r, g, b);
+      // El color, SSS y espuma se evalúan por fragmento en el shader para
+      // evitar el efecto cuadrícula de la malla de 1,25 m. Mantenemos un
+      // matiz suave por vértice sin saltos ni trigonometría por vértice.
+      const shade = 0.96 + Util.clamp(h, -0.8, 0.8) * 0.05;
+      colAttr.setXYZ(i, shade, shade, shade);
     }
     pos.needsUpdate = true;
     if (refreshDetail) {
@@ -607,6 +925,7 @@ const World = {
     }
 
     World.updateHullFoam(raftRect, time, offsetX, offsetZ, storm, refreshDetail);
+    World.updateDeckWash(raftRect, time, offsetX, offsetZ, storm);
   },
 
   // Actualiza iluminación/cielo según la hora del día (0-24)
@@ -679,11 +998,18 @@ const World = {
     if (World.scene.fog.near >= World.scene.fog.far) {
       World.scene.fog.near = Math.max(0, World.scene.fog.far - 12);
     }
-    // Colores del agua por vértice: profundo, cresta y espuma
-    World.waterDeep.copy(water).multiplyScalar(0.52);
-    World.waterLight.copy(water).multiplyScalar(0.95).lerp(sky, 0.07);
-    World.foamColor.setHex(0xeaf6ff).lerp(sky, 0.25);
-    if (World.seaUniforms) World.seaUniforms.seaSky.value.copy(sky);
+    // Colores del agua: profundo, subsuperficial, cresta y espuma
+    World.waterDeep.copy(water).multiplyScalar(0.46);
+    World.waterLight.copy(water).multiplyScalar(0.98).lerp(sky, 0.1);
+    World.waterScatter.setHex(0x28b8c2).lerp(water, 0.4).lerp(sunC, 0.08);
+    World.foamColor.setHex(0xeaf6ff).lerp(sky, 0.22);
+    if (World.seaUniforms) {
+      World.seaUniforms.seaSky.value.copy(sky);
+      if (World.seaUniforms.seaDeep) World.seaUniforms.seaDeep.value.copy(World.waterDeep);
+      if (World.seaUniforms.seaLight) World.seaUniforms.seaLight.value.copy(World.waterLight);
+      if (World.seaUniforms.seaScatter) World.seaUniforms.seaScatter.value.copy(World.waterScatter);
+      if (World.seaUniforms.seaFoam) World.seaUniforms.seaFoam.value.copy(World.foamColor);
+    }
     World.sunLight.color.copy(sunC);
     World.sunLight.intensity = sunI;
     World.ambient.intensity = ambI;
@@ -706,18 +1032,24 @@ const World = {
     World.stars.position.set(World.camTarget.x, 0, World.camTarget.z);
   },
 
-  updateRain: (dt, active) => {
+  updateRain: (dt, active, windX = 0, windZ = 0) => {
     World.rain.visible = active;
     if (!active || dt <= 0) return;
     const pos = World.rain.geometry.attributes.position;
     const cam = World.camTarget;
+    const driftX = (Number(windX) || 0) * 3.2;
+    const driftZ = (Number(windZ) || 0) * 3.2;
     for (let i = 0; i < pos.count; i++) {
       let y = pos.getY(i) - dt * 18;
+      let x = (typeof pos.getX === 'function' ? pos.getX(i) : 0) + driftX * dt;
+      let z = (typeof pos.getZ === 'function' ? pos.getZ(i) : 0) + driftZ * dt;
       if (y < 0) {
         y = Util.rand(14, 20);
-        pos.setX(i, cam.x + Util.rand(-25, 25));
-        pos.setZ(i, cam.z + Util.rand(-25, 25));
+        x = cam.x + Util.rand(-25, 25);
+        z = cam.z + Util.rand(-25, 25);
       }
+      pos.setX(i, x);
+      pos.setZ(i, z);
       pos.setY(i, y);
     }
     pos.needsUpdate = true;
@@ -933,6 +1265,385 @@ const World = {
       out.y = 0;
     }
     return out; // {x, 0, z}
+  },
+
+  ensureHorizonMeshes: () => {
+    if (World.horizonGroup || !World.scene || typeof THREE.Group !== 'function') {
+      return World.horizonGroup;
+    }
+    const root = new THREE.Group();
+    root.name = 'horizon-world';
+
+    // 1. Filamentos orgánicos del campo vectorial de corrientes (afinados y sin bordes duros)
+    const currentGroup = new THREE.Group();
+    currentGroup.name = 'current-streaks';
+    const streakGeo = new THREE.PlaneGeometry(3.0, 0.15, 6, 2);
+    streakGeo.rotateX(-Math.PI / 2);
+    if (streakGeo.attributes?.position && typeof THREE.BufferAttribute === 'function') {
+      const sPos = streakGeo.attributes.position;
+      const sCols = new Float32Array(sPos.count * 4);
+      for (let vi = 0; vi < sPos.count; vi++) {
+        const lx = sPos.getX(vi);
+        const lz = sPos.getZ(vi);
+        const u = Util.clamp(1 - Math.abs(lx) / 1.5, 0, 1);
+        const v = Util.clamp(1 - Math.abs(lz) / 0.075, 0, 1);
+        // Curva en S sutil y extremos completamente transparentes (alpha = 0)
+        sPos.setZ(vi, lz * (0.35 + 0.65 * Math.sin(u * Math.PI * 0.5)) + Math.sin(lx * 1.6) * 0.045);
+        const alpha = u * u * v * 0.22;
+        sCols[vi * 4] = 0.84;
+        sCols[vi * 4 + 1] = 0.96;
+        sCols[vi * 4 + 2] = 1.0;
+        sCols[vi * 4 + 3] = alpha;
+      }
+      streakGeo.setAttribute('color', new THREE.BufferAttribute(sCols, 4));
+    }
+    const streakMat = new THREE.MeshBasicMaterial({
+      color: 0xdff8ff,
+      vertexColors: Boolean(streakGeo.attributes?.color),
+      transparent: true,
+      opacity: streakGeo.attributes?.color ? 1.0 : 0.16,
+      depthWrite: false,
+      fog: true
+    });
+    World.currentStreaks = [];
+    for (let i = 0; i < 12; i++) {
+      const mesh = new THREE.Mesh(streakGeo, streakMat);
+      const angle = (i / 12) * Math.PI * 2;
+      const radius = 5.5 + (i % 3) * 6.5;
+      mesh.userData.relX = Math.cos(angle) * radius;
+      mesh.userData.relZ = Math.sin(angle) * radius;
+      mesh.userData.phase = i * 0.7;
+      currentGroup.add(mesh);
+      World.currentStreaks.push(mesh);
+    }
+    root.add(currentGroup);
+    World.currentStreaksGroup = currentGroup;
+
+    // 2. Isla en el horizonte: silueta lejana + costa detallada cerca
+    const islandGroup = new THREE.Group();
+    islandGroup.name = 'horizon-island';
+    islandGroup.visible = false;
+
+    const silhouetteMat = new THREE.MeshLambertMaterial({
+      color: 0x2b4c65,
+      transparent: true,
+      opacity: 0,
+      fog: true
+    });
+    const peakMain = new THREE.Mesh(
+      new THREE.ConeGeometry(9.5, 14.5, 7),
+      silhouetteMat
+    );
+    peakMain.position.set(0, 6.5, 0);
+    const peakSide = new THREE.Mesh(
+      new THREE.ConeGeometry(6.8, 9.2, 6),
+      silhouetteMat
+    );
+    peakSide.position.set(-5.5, 4.1, 3.2);
+    islandGroup.add(peakMain, peakSide);
+
+    const beachMat = new THREE.MeshLambertMaterial({
+      color: 0xe6c98a,
+      transparent: true,
+      opacity: 0,
+      fog: true
+    });
+    const foliageMat = new THREE.MeshLambertMaterial({
+      color: 0x3b8c4f,
+      transparent: true,
+      opacity: 0,
+      fog: true
+    });
+    const trunkMat = new THREE.MeshLambertMaterial({
+      color: 0x6d4c41,
+      transparent: true,
+      opacity: 0,
+      fog: true
+    });
+    const beach = new THREE.Mesh(
+      new THREE.CylinderGeometry(8.5, 12.2, 1.3, 9),
+      beachMat
+    );
+    beach.position.set(0, 0.35, 0);
+    const hill = new THREE.Mesh(
+      new THREE.ConeGeometry(7.2, 7.8, 7),
+      foliageMat
+    );
+    hill.position.set(0.8, 3.8, -0.5);
+    const palmTrunk = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.18, 0.28, 3.4, 5),
+      trunkMat
+    );
+    palmTrunk.position.set(-4.2, 2.1, 3.5);
+    palmTrunk.rotation.z = 0.18;
+    const palmCrown = new THREE.Mesh(
+      new THREE.ConeGeometry(1.7, 1.2, 6),
+      foliageMat
+    );
+    palmCrown.position.set(-4.5, 3.9, 3.5);
+    islandGroup.add(beach, hill, palmTrunk, palmCrown);
+    islandGroup.userData = {
+      silhouetteMat,
+      coastMats: [beachMat, foliageMat, trunkMat]
+    };
+    root.add(islandGroup);
+    World.islandGroup = islandGroup;
+
+    // 3. Cadena de arrecifes lejanos en el horizonte
+    const distantReefsGroup = new THREE.Group();
+    distantReefsGroup.name = 'horizon-reefs';
+    distantReefsGroup.visible = false;
+    const distantReefMat = new THREE.MeshLambertMaterial({
+      color: 0x5c7684,
+      transparent: true,
+      opacity: 0,
+      fog: true
+    });
+    for (let i = 0; i < 3; i++) {
+      const spire = new THREE.Mesh(
+        new THREE.ConeGeometry(1.9 + i * 0.35, 2.8 + (i % 2) * 1.1, 5),
+        distantReefMat
+      );
+      spire.position.set((i - 1) * 5.2, 0.9, (i % 2) * 2.1);
+      distantReefsGroup.add(spire);
+    }
+    distantReefsGroup.userData = { mat: distantReefMat };
+    root.add(distantReefsGroup);
+    World.distantReefsGroup = distantReefsGroup;
+
+    // 4. Célula de tormenta: sector de cielo oscuro y frente de lluvia
+    const stormSectorGroup = new THREE.Group();
+    stormSectorGroup.name = 'horizon-storm-sector';
+    stormSectorGroup.visible = false;
+    const cloudMat = new THREE.MeshBasicMaterial({
+      color: 0x162433,
+      transparent: true,
+      opacity: 0,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      fog: true
+    });
+    const rainWallMat = new THREE.MeshBasicMaterial({
+      color: 0x6286a6,
+      transparent: true,
+      opacity: 0,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      fog: true
+    });
+    const cloudCanopy = new THREE.Mesh(
+      new THREE.CylinderGeometry(18, 22, 8.5, 8, 1, true, -0.55, 1.1),
+      cloudMat
+    );
+    cloudCanopy.position.set(0, 17, 0);
+    const rainWall = new THREE.Mesh(
+      new THREE.CylinderGeometry(19, 19, 18, 8, 1, true, -0.5, 1.0),
+      rainWallMat
+    );
+    rainWall.position.set(0, 8.5, 0);
+    stormSectorGroup.add(cloudCanopy, rainWall);
+    stormSectorGroup.userData = { cloudMat, rainWallMat };
+    root.add(stormSectorGroup);
+    World.stormSectorGroup = stormSectorGroup;
+
+    // 5. Barco de rescate acercándose por un rumbo en el tramo final de radio
+    const shipGroup = new THREE.Group();
+    shipGroup.name = 'horizon-rescue-ship';
+    shipGroup.visible = false;
+    const hullMat = new THREE.MeshLambertMaterial({
+      color: 0x37474f,
+      transparent: true,
+      opacity: 0,
+      fog: true
+    });
+    const cabinMat = new THREE.MeshLambertMaterial({
+      color: 0xeceff1,
+      transparent: true,
+      opacity: 0,
+      fog: true
+    });
+    const beaconMat = new THREE.MeshBasicMaterial({
+      color: 0xffd54f,
+      transparent: true,
+      opacity: 0
+    });
+    const hull = new THREE.Mesh(new THREE.BoxGeometry(6.4, 1.6, 2.2), hullMat);
+    hull.position.set(0, 0.65, 0);
+    const cabin = new THREE.Mesh(new THREE.BoxGeometry(2.3, 1.7, 1.8), cabinMat);
+    cabin.position.set(-1.1, 2.1, 0);
+    const mast = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.1, 0.14, 3.0, 5),
+      hullMat
+    );
+    mast.position.set(0.8, 2.6, 0);
+    const shipLight = new THREE.Mesh(
+      new THREE.SphereGeometry(0.28, 6, 6),
+      beaconMat
+    );
+    shipLight.position.set(0.8, 4.1, 0);
+    shipGroup.add(hull, cabin, mast, shipLight);
+    shipGroup.userData = { mats: [hullMat, cabinMat, beaconMat] };
+    root.add(shipGroup);
+    World.rescueShipGroup = shipGroup;
+
+    World.scene.add(root);
+    World.horizonGroup = root;
+    return root;
+  },
+
+  updateHorizon: (game, center, time, dt = 0) => {
+    if (!game || !World.scene || !World.ensureHorizonMeshes()) return;
+    const cx = Number(center?.x) || 0;
+    const cz = Number(center?.z) || 0;
+    const chartX = Number(game.chartX) || 0;
+    const chartZ = Number(game.chartZ) || 0;
+    const safeDt = Math.max(0, Math.min(Number(dt) || 0, 0.1));
+
+    // 1. Actualizar vetas de corriente en el agua según el campo vectorial
+    if (World.currentStreaks) {
+      const anchored = Boolean(
+        game.anchorDeployed && game.raft?.countProvides('anchor') > 0
+      );
+      for (const streak of World.currentStreaks) {
+        const sampleX = chartX + streak.userData.relX;
+        const sampleZ = chartZ + streak.userData.relZ;
+        const vec = typeof game.getCurrentAt === 'function'
+          ? game.getCurrentAt(sampleX, sampleZ)
+          : (game.currentVector || { x: 0.72, z: 0 });
+        if (!anchored && safeDt > 0) {
+          streak.userData.relX -= vec.x * safeDt * 2.2;
+          streak.userData.relZ -= vec.z * safeDt * 2.2;
+          if (streak.userData.relX < -20) streak.userData.relX += 40;
+          if (streak.userData.relX > 20) streak.userData.relX -= 40;
+          if (streak.userData.relZ < -20) streak.userData.relZ += 40;
+          if (streak.userData.relZ > 20) streak.userData.relZ -= 40;
+        }
+        const wx = cx + streak.userData.relX;
+        const wz = cz + streak.userData.relZ;
+        const wy = World.waveHeight(
+          wx,
+          wz,
+          time,
+          game.worldOffset || 0,
+          game.worldOffsetZ || 0
+        ) * World.waveAmp + 0.04;
+        streak.position.set(wx, wy, wz);
+        streak.rotation.y = -Math.atan2(vec.z, vec.x);
+      }
+    }
+
+    // 2. Isla en el horizonte (silueta lejos, costa detallada cerca)
+    if (World.islandGroup) {
+      const dist = Number(game.islandDistance);
+      const visibleRange = game.islandRevealed || game.victoryCondition === 'island'
+        ? 300
+        : 220;
+      if (Number.isFinite(dist) && dist <= visibleRange) {
+        World.islandGroup.visible = true;
+        const dx = (Number(game.islandX) || 0) - chartX;
+        const dz = (Number(game.islandZ) || 0) - chartZ;
+        const bearing = Math.atan2(dz, dx);
+        const visualDist = Util.clamp(13 + dist * 0.2, 13, 72);
+        World.islandGroup.position.set(
+          cx + Math.cos(bearing) * visualDist,
+          -0.2,
+          cz + Math.sin(bearing) * visualDist
+        );
+        World.islandGroup.rotation.y = -bearing + Math.PI * 0.5;
+        const silhouetteAlpha = Util.clamp((visibleRange - dist) / 70, 0.18, 0.96);
+        const coastAlpha = Util.clamp((140 - dist) / 95, 0, 1);
+        World.islandGroup.userData.silhouetteMat.opacity = silhouetteAlpha;
+        for (const m of World.islandGroup.userData.coastMats) {
+          m.opacity = coastAlpha;
+        }
+      } else {
+        World.islandGroup.visible = false;
+      }
+    }
+
+    // 3. Arrecifes lejanos visibles antes de chocar
+    if (World.distantReefsGroup && typeof GameSimulation !== 'undefined') {
+      const nearestReef = GameSimulation.getNearestRegion(game, 'reef');
+      if (nearestReef && nearestReef.distance < nearestReef.region.radius + 75) {
+        World.distantReefsGroup.visible = true;
+        const { region, distance } = nearestReef;
+        const bearing = Math.atan2(region.z - chartZ, region.x - chartX);
+        const visualDist = Util.clamp(16 + Math.max(0, distance - region.radius * 0.4) * 0.55, 16, 62);
+        World.distantReefsGroup.position.set(
+          cx + Math.cos(bearing) * visualDist,
+          -0.15,
+          cz + Math.sin(bearing) * visualDist
+        );
+        World.distantReefsGroup.rotation.y = -bearing;
+        const alpha = Util.clamp(
+          1 - Math.max(0, distance - region.radius) / 75,
+          0.2,
+          0.92
+        );
+        World.distantReefsGroup.userData.mat.opacity = alpha;
+      } else {
+        World.distantReefsGroup.visible = false;
+      }
+    }
+
+    // 4. Sector de cielo y frente de lluvia de la célula de tormenta
+    if (World.stormSectorGroup && typeof GameSimulation !== 'undefined') {
+      const stormInfo = GameSimulation.getStormPush(game);
+      if (stormInfo.distance < 155 || game.storm) {
+        World.stormSectorGroup.visible = true;
+        const bearing = stormInfo.bearing || 0.6;
+        const visualDist = Util.clamp(22 + Math.max(0, stormInfo.distance - 20) * 0.35, 22, 68);
+        World.stormSectorGroup.position.set(
+          cx + Math.cos(bearing) * visualDist,
+          0,
+          cz + Math.sin(bearing) * visualDist
+        );
+        World.stormSectorGroup.rotation.y = -bearing - Math.PI * 0.5;
+        const alpha = Util.clamp(
+          stormInfo.intensity > 0
+            ? stormInfo.intensity
+            : (1 - stormInfo.distance / 155),
+          0.18,
+          0.85
+        );
+        World.stormSectorGroup.userData.cloudMat.opacity = alpha * 0.78;
+        World.stormSectorGroup.userData.rainWallMat.opacity = alpha * 0.42;
+      } else {
+        World.stormSectorGroup.visible = false;
+      }
+    }
+
+    // 5. Barco acercándose desde un rumbo durante el tramo final de señal de radio
+    if (World.rescueShipGroup) {
+      const radioFinal =
+        game.victoryCondition === 'radio' && (Number(game.rescuedSignal) || 0) >= 55;
+      const inShipLane = game.zone === 'ship';
+      if (radioFinal || inShipLane) {
+        World.rescueShipGroup.visible = true;
+        const signalProgress = radioFinal
+          ? Util.clamp(((Number(game.rescuedSignal) || 55) - 55) / 45, 0, 1)
+          : 0.25;
+        const bearing = Number(game.rescueShipBearing) || -0.62;
+        const visualDist = Util.lerp(66, 14, signalProgress);
+        const wx = cx + Math.cos(bearing) * visualDist;
+        const wz = cz + Math.sin(bearing) * visualDist;
+        const wy = World.waveHeight(
+          wx,
+          wz,
+          time,
+          game.worldOffset || 0,
+          game.worldOffsetZ || 0
+        ) * World.waveAmp;
+        World.rescueShipGroup.position.set(wx, wy, wz);
+        World.rescueShipGroup.rotation.y = -bearing + Math.PI;
+        const opacity = Util.clamp(0.32 + signalProgress * 0.68, 0.32, 1);
+        for (const m of World.rescueShipGroup.userData.mats) {
+          m.opacity = opacity;
+        }
+      } else {
+        World.rescueShipGroup.visible = false;
+      }
+    }
   },
 
   render: () => {

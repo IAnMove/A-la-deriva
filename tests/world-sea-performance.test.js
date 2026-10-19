@@ -229,3 +229,31 @@ assert.equal(ocean.sampleSeaMeshHeight(0.5, 0.5), 0.5);
 assert.equal(ocean.sampleSeaMeshHeight(1, 1), 1);
 assert.equal(ocean.sampleSeaMeshHeight(2, 2), null);
 console.log('✓ espuma alineada con los triángulos visibles del océano');
+
+// Lenguas de agua y espuma que trepan a la cubierta cuando sube el oleaje.
+raft.group.position.set(0, 0, 0);
+raft.group.rotation.set(0, 0, 0);
+raft.group.updateMatrixWorld(true);
+ocean.updateDeckWash(rect, 0.4, 0, 0, true);
+const firstWash = ocean.deckWash;
+assert.ok(firstWash && firstWash.visible, 'deckWash visible en temporal/oleaje');
+const washPos = firstWash.geometry.attributes.position;
+const washCol = firstWash.geometry.attributes.color;
+const washMeta = firstWash.geometry.userData.meta;
+let overDeckVertices = 0;
+for (let i = 0; i < washPos.count; i++) {
+  const row = washMeta[i * 8 + 5];
+  const col = washMeta[i * 8 + 6];
+  const y = washPos.getY(i);
+  const alpha = washCol.getW(i);
+  if (col === 0 || col === 3 || row === 0 || row === 3) {
+    assert.equal(alpha, 0, 'lenguas de agua se desvanecen en sus extremos');
+  } else if (alpha > 0 && y > raft.deckHeight) {
+    overDeckVertices++;
+  }
+}
+assert.ok(overDeckVertices > 0, 'las olas con mayor oleaje suben sobre los tablones de la cubierta');
+ocean.updateDeckWash(rect, 0.5, 0, 0, true);
+assert.equal(ocean.deckWash, firstWash, 'reutiliza la malla de agua sobre cubierta');
+console.log('✓ lenguas de agua suben a la cubierta con el oleaje sin romper el rendimiento');
+

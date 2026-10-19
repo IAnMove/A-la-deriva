@@ -92,6 +92,22 @@ assert.ok(modelRaft.group.position.equals(groupPosition), 'la animación de piez
 modelRaft.updateVisuals(13, 0.1, { beaconLit: false });
 assert.equal(light.visible, false);
 
+const sailCloth = findStructure('sail').getObjectByName('sail-cloth');
+const sailPennant = findStructure('sail').getObjectByName('wind-pennant');
+const mastFlag = findStructure('mast').getObjectByName('sail-cloth');
+const fireFlame = findStructure('fire').getObjectByName('flame');
+assert.ok(sailCloth && sailPennant && mastFlag && fireFlame, 'vela, catavientos, banderola y llama existen');
+modelRaft.updateVisuals(10, 0.05, { wind: 1.2, windAngle: -0.7, heading: 0 });
+const sailRotPort = sailCloth.rotation.y;
+const pennantRotPort = sailPennant.rotation.y;
+const mastRotPort = mastFlag.rotation.y;
+const flameTiltPort = fireFlame.rotation.x;
+modelRaft.updateVisuals(10, 0.05, { wind: 1.2, windAngle: 0.7, heading: 0 });
+assert.ok(sailCloth.rotation.y < sailRotPort, 'la vela se orienta según el ángulo del viento');
+assert.ok(sailPennant.rotation.y < pennantRotPort, 'el catavientos de la vela gira con el viento');
+assert.ok(mastFlag.rotation.y < mastRotPort, 'la banderola del mástil sigue el viento');
+assert.ok(fireFlame.rotation.x > flameTiltPort, 'la llama se inclina con la dirección del viento');
+
 const damagedRaft = makeRaft();
 damagedRaft.placeAt(1, 0, 'floor');
 damagedRaft.placeAt(2, 0, 'floor');

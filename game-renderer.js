@@ -151,6 +151,38 @@ const GameRenderer = {
     marker.material.color.setHex(destination ? 0x8ff1d8 : 0xffd18a);
   },
 
+  smokeTimer: 0,
+
+  updateSmokePlumes(game, dt, wind) {
+    if (!dt || dt <= 0 || typeof Particles === 'undefined' ||
+        typeof Particles.emitSmoke !== 'function' || !game?.raft?.grid) return;
+    GameRenderer.smokeTimer -= dt;
+    if (GameRenderer.smokeTimer > 0) return;
+    GameRenderer.smokeTimer = 0.14;
+    const cs = game.raft.cellSize || 2;
+    const deckY = (game.raft.group?.position?.y || 0) + (game.raft.deckHeight || 0.35);
+    const wx = Number(wind?.x) || 0.8;
+    const wz = Number(wind?.z) || 0;
+    for (const [key, cell] of game.raft.grid.entries()) {
+      if (!cell || cell.health <= 0) continue;
+      const bKey = cell.buildingKey;
+      if (bKey !== 'fire' && bKey !== 'smokehouse' &&
+          bKey !== 'kitchen' && !(bKey === 'beacon' && game.beaconLit)) continue;
+      const [gx, gy] = key.split(',').map(Number);
+      const baseX = (gx + 0.5) * cs;
+      const baseZ = (gy + 0.5) * cs;
+      if (bKey === 'fire') {
+        Particles.emitSmoke(baseX, deckY + 0.65, baseZ, wx, wz, '#cfd8dc', 1);
+      } else if (bKey === 'smokehouse') {
+        Particles.emitSmoke(baseX + 0.3, deckY + 1.72, baseZ - 0.2, wx, wz, '#b0bec5', 1);
+      } else if (bKey === 'kitchen') {
+        Particles.emitSmoke(baseX - 0.43, deckY + 1.45, baseZ - 0.32, wx, wz, '#d7ccc8', 1);
+      } else if (bKey === 'beacon' && game.beaconLit) {
+        Particles.emitSmoke(baseX, deckY + 1.88, baseZ, wx, wz, '#ffe082', 1);
+      }
+    }
+  },
+
   draw(game, dt) {
     const worldRunning = game.state === 'playing' && !game.paused;
     const worldDt = worldRunning ? dt : 0;
@@ -167,6 +199,14 @@ const GameRenderer = {
       : worldTime;
     const characterDt = worldRunning || game.fishing?.active ? dt : 0;
     const center = game.raft.getCenter();
+    const wind = typeof game.getWindAt === 'function'
+      ? game.getWindAt()
+      : (game.windVector || {
+          x: game.storm ? 1.8 : 0.85,
+          z: 0,
+          angle: Number(game.windAngle) || 0,
+          strength: game.storm ? 1.8 : 0.85
+        });
 
     if (game.raft.group) {
       const wave = World.waveHeight(
@@ -184,7 +224,10 @@ const GameRenderer = {
         Math.cos(seaTime * 0.7) * 0.018 * rockMultiplier;
 
       if (game.raft.updateVisuals) game.raft.updateVisuals(seaTime, worldDt, {
-        wind: game.storm ? 1.8 : 0.7,
+        wind: wind.strength ?? (game.storm ? 1.8 : 0.7),
+        windAngle: wind.angle ?? 0,
+        windX: wind.x ?? 0.85,
+        windZ: wind.z ?? 0,
         motorActive: game.resources.fuel > 0 && game.victoryCondition === 'island',
         anchorDeployed: game.anchorDeployed,
         beaconLit: game.beaconLit,
@@ -203,6 +246,8 @@ const GameRenderer = {
         }
       });
     }
+
+    GameRenderer.updateSmokePlumes(game, worldDt, wind);
 
     PlayerVis.sync(game.player, characterDt, characterTime);
     PlayerVis.updateAim(
@@ -239,6 +284,9 @@ const GameRenderer = {
     raftRect.hx = (rb.maxX - rb.minX + 1) * 0.5 * rcs;
     raftRect.hz = (rb.maxY - rb.minY + 1) * 0.5 * rcs;
 
+    if (World.seaUniforms?.seaWind?.value && typeof World.seaUniforms.seaWind.value.set === 'function') {
+      World.seaUniforms.seaWind.value.set(wind.x ?? 1, wind.z ?? 0);
+    }
     World.updateSea(
       seaTime,
       game.worldOffset,
@@ -247,7 +295,10 @@ const GameRenderer = {
       raftRect
     );
     World.updateDayNight(game.time, game.storm, game.fog, worldDt);
-    World.updateRain(worldDt, game.rain);
+    World.updateRain(worldDt, game.rain, wind.x, wind.z);
+    if (typeof World.updateHorizon === 'function') {
+      World.updateHorizon(game, center, seaTime, worldDt);
+    }
     World.render();
   }
 };

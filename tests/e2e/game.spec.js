@@ -281,7 +281,7 @@ test('recorre balsas cóncavas y permite partir solo con vela y timón', async (
     Game.resources.fuel = 0;
     Game.resources.plastic = 0;
     Game.victoryCondition = null;
-    Game.islandDistance = 2000;
+    Game.initChart(Game.worldSeed);
     Game.interact();
   });
   await expect(page.locator('#decision-panel')).toBeVisible();

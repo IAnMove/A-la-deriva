@@ -1736,7 +1736,7 @@ test('vela y radio activan rutas coherentes y conservan el progreso al cambiar',
       rope: 0, food: 2, water: 2.6, fuel: 0
     };
     Game.victoryCondition = null;
-    Game.islandDistance = 2000;
+    Game.initChart(424242);
     Game.navigationIntel = 0;
     var routeDecisionFixture = Game.showDecision;
     var routeOptionsFixture = null;
@@ -1747,12 +1747,23 @@ test('vela y radio activan rutas coherentes y conservan el progreso al cambiar',
     routeOptionsFixture[0].action();
     var sailRouteFixture = Game.victoryCondition;
     var sailDistanceFixture = Game.islandDistance;
+    var sailRevealedFixture = Game.islandRevealed;
     Game.updateObjective();
     var islandObjectiveFixture =
       document.getElementById('objective-text').textContent;
+
+    Game.victoryCondition = null;
+    Game.islandRevealed = false;
+    Game.islandDistance = 2000;
+    routeOptionsFixture = null;
+    Game.interact();
+    routeOptionsFixture[0].action();
+    var noTeleportDistanceFixture = Game.islandDistance;
   `);
   assert.equal(run('sailRouteFixture'), 'island');
   assert.equal(run('sailDistanceFixture'), 300);
+  assert.equal(run('sailRevealedFixture'), true);
+  assert.equal(run('noTeleportDistanceFixture'), 2000);
   assert.match(run('islandObjectiveFixture'), /Isla a 300 m/);
 
   resetRaft([['0,0', 'radio', 35]]);
@@ -1961,3 +1972,241 @@ test('la enfermería no gasta tela en otra acción cuando falta agua para la inf
   assert.equal(run('Game.player.health'),50);
   assert.equal(run('Game.getInteractionContext().available'),false);
 });
+
+test('virar cambia el desvío lateral en la carta náutica', () => {
+  resetRaft([
+    ['0,0', 'sail', 40],
+    ['1,0', 'rudder', 45]
+  ]);
+  run(`
+    Game.state = 'playing';
+    Game.paused = false;
+    Game.anchorDeployed = false;
+    Game.victoryCondition = 'island';
+    Game.resources = {
+      wood: 0, plastic: 0, cloth: 0, metal: 0,
+      rope: 0, food: 2, water: 2, fuel: 0
+    };
+    Game.initChart(123456);
+    var startZFixture = Game.chartZ;
+    Game.navigationHeading = -1;
+    Game.updateEntities(1);
+    var portDeltaZFixture = Game.chartZ - startZFixture;
+    var portVzFixture = Game.chartVz;
+
+    Game.initChart(123456);
+    Game.navigationHeading = 0;
+    Game.updateEntities(1);
+    var straightDeltaZFixture = Game.chartZ - startZFixture;
+    var straightVzFixture = Game.chartVz;
+
+    Game.initChart(123456);
+    Game.navigationHeading = 1;
+    Game.updateEntities(1);
+    var starboardDeltaZFixture = Game.chartZ - startZFixture;
+    var starboardVzFixture = Game.chartVz;
+
+    Game.initChart(123456);
+    Game.worldOffsetZ = 0;
+    Game.navigationHeading = -1;
+    var dayPortStepFixture = Game.resolveNavigationDay().lateralStep;
+    var dayPortChartZFixture = Game.chartZ;
+
+    Game.initChart(123456);
+    Game.worldOffsetZ = 0;
+    Game.navigationHeading = 1;
+    var dayStarboardStepFixture = Game.resolveNavigationDay().lateralStep;
+    var dayStarboardChartZFixture = Game.chartZ;
+  `);
+  assert.ok(run('portVzFixture') < run('straightVzFixture'));
+  assert.ok(run('starboardVzFixture') > run('straightVzFixture'));
+  assert.ok(run('portDeltaZFixture') < run('straightDeltaZFixture'));
+  assert.ok(run('starboardDeltaZFixture') > run('straightDeltaZFixture'));
+  assert.ok(run('dayPortStepFixture') < 0);
+  assert.ok(run('dayStarboardStepFixture') > 0);
+  assert.notEqual(run('dayPortChartZFixture'), run('dayStarboardChartZFixture'));
+});
+
+test('entrar en una región de arrecife genera arrecifes por delante y no debajo de la balsa', () => {
+  resetRaft([
+    ['0,0', 'floor', 50],
+    ['1,0', 'floor', 50],
+    ['0,1', 'floor', 50]
+  ]);
+  run(`
+    Game.state = 'playing';
+    Game.paused = false;
+    Game.anchorDeployed = false;
+    Game.initChart(777777);
+    EntityManager.reefs = [];
+    var reefRegionFixture = Game.regions.find(r => r.type === 'reef');
+    reefRegionFixture.reefsSpawned = false;
+    Game.chartX = reefRegionFixture.x - reefRegionFixture.radius - 10;
+    Game.chartZ = reefRegionFixture.z;
+    Game.updateZone();
+    var zoneOutsideFixture = Game.zone;
+
+    Game.chartX = reefRegionFixture.x - reefRegionFixture.radius + 2;
+    Game.chartZ = reefRegionFixture.z;
+    Game.updateZone();
+    var zoneBorderFixture = Game.zone;
+    var blendBorderFixture = Game.regionBlend;
+
+    Game.chartX = reefRegionFixture.x;
+    Game.chartZ = reefRegionFixture.z;
+    Game.updateZone();
+    var blendCenterFixture = Game.regionBlend;
+
+    var raftCenterFixture = Game.raft.getCenter();
+    var spawnedReefCountFixture = EntityManager.reefs.length;
+    var allReefsAheadFixture = EntityManager.reefs.every(
+      reef => reef.x > raftCenterFixture.x + 8
+    );
+    var noReefUnderRaftFixture = EntityManager.reefs.every(
+      reef => !Game.raft.intersectsCircle(reef.x, reef.z, reef.radius + 1)
+    );
+  `);
+  assert.notEqual(run('zoneOutsideFixture'), 'reef');
+  assert.equal(run('zoneBorderFixture'), 'reef');
+  assert.ok(run('blendBorderFixture') > 0 && run('blendBorderFixture') < 1);
+  assert.equal(run('blendCenterFixture'), 1);
+  assert.ok(run('spawnedReefCountFixture') >= 3);
+  assert.equal(run('allReefsAheadFixture'), true);
+  assert.equal(run('noReefUnderRaftFixture'), true);
+});
+
+test('el ancla anula la velocidad de la carta y el guardado conserva posición y migra partidas viejas', () => {
+  resetRaft([
+    ['0,0', 'sail', 40],
+    ['1,0', 'rudder', 45],
+    ['0,1', 'anchor', 55]
+  ]);
+  run(`
+    Game.state = 'playing';
+    Game.paused = false;
+    Game.initChart(909090);
+    Game.victoryCondition = 'island';
+    Game.anchorDeployed = false;
+    Game.storm = true;
+    Game.navigationHeading = 1;
+    Game.updateEntities(1);
+    var unanchoredVxFixture = Game.chartVx;
+    var unanchoredVzFixture = Game.chartVz;
+    var movedChartXFixture = Game.chartX;
+    var movedChartZFixture = Game.chartZ;
+
+    Game.resetPlayerState({ x: 1, z: 3 });
+    Game.raft.selected = null;
+    Game.player.hook = null;
+    Game.interact();
+    var anchorActiveFixture = Game.anchorDeployed;
+    var immediateAnchoredVxFixture = Game.chartVx;
+    var immediateAnchoredVzFixture = Game.chartVz;
+
+    Game.updateEntities(2);
+    var afterAnchorChartXFixture = Game.chartX;
+    var afterAnchorChartZFixture = Game.chartZ;
+    var afterUpdateAnchoredVxFixture = Game.chartVx;
+    var afterUpdateAnchoredVzFixture = Game.chartVz;
+
+    Game.regions[0].visited = true;
+    var savedChartDataFixture = Game.getSaveData();
+    Game.initChart(111111);
+    Game.loadFromSave(savedChartDataFixture);
+    var restoredSeedFixture = Game.worldSeed;
+    var restoredChartXFixture = Game.chartX;
+    var restoredChartZFixture = Game.chartZ;
+    var restoredVisitedFixture = Game.regions[0].visited;
+
+    var legacySaveFixture = Object.assign({}, savedChartDataFixture, {
+      chartX: undefined,
+      chartZ: undefined,
+      islandX: undefined,
+      islandZ: undefined,
+      regions: undefined,
+      islandDistance: 185
+    });
+    delete legacySaveFixture.chartX;
+    delete legacySaveFixture.chartZ;
+    delete legacySaveFixture.islandX;
+    delete legacySaveFixture.islandZ;
+    delete legacySaveFixture.regions;
+    Game.loadFromSave(legacySaveFixture);
+    var legacyDistFixture = Game.islandDistance;
+    var legacyCrossProductFixture = Math.abs(
+      Game.chartX * Game.islandZ - Game.chartZ * Game.islandX
+    );
+  `);
+  assert.ok(Math.abs(run('unanchoredVxFixture')) > 0.1);
+  assert.ok(Math.abs(run('unanchoredVzFixture')) > 0.01);
+  assert.equal(run('anchorActiveFixture'), true);
+  assert.equal(run('immediateAnchoredVxFixture'), 0);
+  assert.equal(run('immediateAnchoredVzFixture'), 0);
+  assert.equal(run('afterUpdateAnchoredVxFixture'), 0);
+  assert.equal(run('afterUpdateAnchoredVzFixture'), 0);
+  assert.equal(run('afterAnchorChartXFixture'), run('movedChartXFixture'));
+  assert.equal(run('afterAnchorChartZFixture'), run('movedChartZFixture'));
+  assert.equal(run('restoredSeedFixture'), 909090);
+  assert.ok(Math.abs(run('restoredChartXFixture') - run('movedChartXFixture')) < 1e-6);
+  assert.ok(Math.abs(run('restoredChartZFixture') - run('movedChartZFixture')) < 1e-6);
+  assert.equal(run('restoredVisitedFixture'), true);
+  assert.equal(run('legacyDistFixture'), 185);
+  assert.ok(run('legacyCrossProductFixture') < 1e-4);
+});
+
+test('el viento direccional impulsa la vela según el ángulo, arrastra el humo y se muestra en el HUD', () => {
+  resetRaft([
+    ['0,0', 'sail', 40],
+    ['1,0', 'rudder', 45],
+    ['0,1', 'fire', 35],
+    ['1,1', 'smokehouse', 38]
+  ]);
+  run(`
+    Game.state = 'playing';
+    Game.paused = false;
+    Game.anchorDeployed = false;
+    Game.initChart(314159);
+    Game.navigationHeading = 0;
+
+    Game.windOverride = { angle: 0, strength: 1.2 };
+    var tailwindStateFixture = Game.getWindAt();
+    var tailwindVelFixture = GameSimulation.computeChartVelocity(Game);
+
+    Game.windOverride = { angle: 2.5, strength: 1.2 };
+    var headwindStateFixture = Game.getWindAt();
+    var headwindVelFixture = GameSimulation.computeChartVelocity(Game);
+
+    Game.windOverride = { angle: 0.55, strength: 1.1 };
+    Game.navigationHeading = -1;
+    var crossBadHeadingFactorFixture = Game.getWindAt().sailFactor;
+    Game.navigationHeading = 1;
+    var crossAlignedHeadingFactorFixture = Game.getWindAt().sailFactor;
+
+    GameUI.updateUI(Game);
+    var navStatusWithWindFixture =
+      document.getElementById('navigation-status').textContent;
+
+    Particles.data = [];
+    Particles.emitSmoke(2, 1.0, 2, 1.4, -0.9, '#cfd8dc', 1);
+    var smokeParticleFixture = Particles.data[0];
+    var smokeStartXFixture = smokeParticleFixture.x;
+    var smokeStartYFixture = smokeParticleFixture.y;
+    var smokeStartZFixture = smokeParticleFixture.z;
+    for (let step = 0; step < 5; step++) Particles.update(0.1);
+    var smokeEndXFixture = smokeParticleFixture.x;
+    var smokeEndYFixture = smokeParticleFixture.y;
+    var smokeEndZFixture = smokeParticleFixture.z;
+    Game.windOverride = null;
+  `);
+  assert.equal(run('tailwindStateFixture.label'), 'popa');
+  assert.equal(run('headwindStateFixture.label'), 'ceñida');
+  assert.ok(run('tailwindStateFixture.sailFactor') > run('headwindStateFixture.sailFactor'));
+  assert.ok(run('tailwindVelFixture.vx') > run('headwindVelFixture.vx'));
+  assert.ok(run('crossAlignedHeadingFactorFixture') > run('crossBadHeadingFactorFixture'));
+  assert.match(run('navStatusWithWindFixture'), /Viento:/);
+  assert.ok(run('smokeEndYFixture') > run('smokeStartYFixture'));
+  assert.ok(run('smokeEndXFixture') > run('smokeStartXFixture') + 0.2);
+  assert.ok(run('smokeEndZFixture') < run('smokeStartZFixture') - 0.1);
+});
+
+

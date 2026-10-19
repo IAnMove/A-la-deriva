@@ -225,6 +225,9 @@ const GameUI = Object.freeze({
       Util.formatAmount(game.resources.fuel);
 
     const navigation = GameSimulation.getNavigationState(game);
+    const wind = typeof GameSimulation.getWindAt === 'function'
+      ? GameSimulation.getWindAt(game)
+      : game.windVector;
     const heading = navigation.heading < -0.1
       ? 'babor'
       : navigation.heading > 0.1
@@ -233,6 +236,7 @@ const GameUI = Object.freeze({
     const navigationStatus = document.getElementById('navigation-status');
     navigationStatus.textContent =
       `Rumbo: ${heading} · Combustible: ${Util.formatAmount(navigation.fuel)}` +
+      (wind?.label ? ` · Viento: ${wind.label}` : '') +
       (game.anchorDeployed ? ' · Ancla desplegada' : '') +
       (game.beaconLit ? ' · Faro encendido' : '') +
       (game.infectionDays > 0

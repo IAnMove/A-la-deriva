@@ -747,14 +747,47 @@ const EntityManager = {
     }
   },
 
-  spawnReef: (center) => {
-    const reef = new Reef(
-      center.x + Util.rand(18, 27),
-      center.z + Util.rand(-14, 14),
-      EntityManager.scene
-    );
+  spawnReef: (center = { x: 1, z: 1 }, raft = null, zOffset = null, xOffset = null) => {
+    const activeRaft = raft || (typeof Game !== 'undefined' ? Game.raft : null);
+    let maxRaftX = (center?.x ?? 1) + 2;
+    if (activeRaft && typeof activeRaft.getBounds === 'function') {
+      const bounds = activeRaft.getBounds();
+      const cs = activeRaft.cellSize || 2;
+      maxRaftX = Math.max(maxRaftX, (bounds.maxX + 1) * cs);
+    }
+    const minAheadX = Math.max((center?.x ?? 1) + 18, maxRaftX + 10);
+    let x = Number.isFinite(xOffset)
+      ? Math.max(minAheadX, (center?.x ?? 1) + xOffset)
+      : Util.rand(minAheadX, minAheadX + 10);
+    const z = Number.isFinite(zOffset)
+      ? (center?.z ?? 1) + zOffset
+      : (center?.z ?? 1) + Util.rand(-12, 12);
+    if (activeRaft && typeof activeRaft.intersectsCircle === 'function') {
+      while (activeRaft.intersectsCircle(x, z, 2.8)) {
+        x += 4;
+      }
+    }
+    const reef = new Reef(x, z, EntityManager.scene);
     EntityManager.reefs.push(reef);
     return reef;
+  },
+
+  spawnReefRegionAhead: (center = { x: 1, z: 1 }, raft = null) => {
+    const activeAhead = EntityManager.reefs.filter(
+      r => r && r.active && !r.hit && r.x > (center?.x ?? 1) + 4
+    );
+    if (activeAhead.length >= 2) return activeAhead;
+    const spawned = [];
+    const offsets = [
+      { x: 19, z: -4.5 },
+      { x: 23, z: 1.2 },
+      { x: 27, z: 6.0 }
+    ];
+    for (const off of offsets) {
+      spawned.push(EntityManager.spawnReef(center, raft, off.z, off.x));
+    }
+    EntityManager.reefTimer = 7;
+    return spawned;
   },
 
   spawnFishBank: (center) => {
@@ -787,11 +820,14 @@ const EntityManager = {
       EntityManager.dangerTimer = Util.rand(base, base * 1.8);
       EntityManager.spawnDanger(center, zone);
     }
+    if (zone === 'reef' && EntityManager.reefs.length === 0) {
+      EntityManager.spawnReefRegionAhead(center);
+    }
     EntityManager.reefTimer -= dt;
     if (EntityManager.reefTimer <= 0) {
-      const base = zone === 'reef' ? 8 : 24;
-      EntityManager.reefTimer = Util.rand(base, base * 1.7);
-      if (zone === 'reef' || Math.random() < 0.22) {
+      const base = zone === 'reef' ? 7 : 24;
+      EntityManager.reefTimer = Util.rand(base, base * 1.6);
+      if (zone === 'reef') {
         EntityManager.spawnReef(center);
       }
     }

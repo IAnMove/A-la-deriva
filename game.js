@@ -66,9 +66,43 @@ const Game = {
 
   raft: new Raft(),
 
-  // Sistemas
+  // Sistemas y carta náutica (chartX, chartZ en metros como fuente de verdad)
+  worldSeed: 1,
+  get seed() {
+    return Game.worldSeed;
+  },
+  set seed(value) {
+    Game.worldSeed = GameSimulation.normalizeSeed(value);
+  },
+  chartX: 0,
+  chartZ: 0,
+  chartVx: 0,
+  chartVz: 0,
+  currentSpeed: 0,
+  currentSpeedZ: 0,
+  currentVector: { x: 0.72, z: 0 },
+  windVector: { x: 0.9, z: 0, angle: 0, strength: 0.9, sailAlignment: 1, sailFactor: 1.1, label: 'popa' },
+  windAngle: 0,
+  windStrength: 0.9,
+  windX: 0.9,
+  windZ: 0,
+  windOverride: null,
+  islandX: 285.94,
+  islandZ: 90.89,
+  islandBearing: 0.308,
+  islandRevealed: false,
+  islandIntelApplied: 0,
+  rescueShipBearing: -0.62,
+  regions: [],
+  currentRegion: null,
+  regionBlend: 0,
   rescuedSignal: 0,
-  islandDistance: 2000,
+  get islandDistance() {
+    return GameSimulation.getIslandDistance(Game);
+  },
+  set islandDistance(value) {
+    GameSimulation.setIslandDistance(Game, value);
+  },
   radioIntel: 0,
   navigationIntel: 0,
   victoryCondition: null,
@@ -86,6 +120,12 @@ const Game = {
   crewConflict: { active: false },
   pendingDaySummary: null,
   pendingDayResolution: null,
+
+  initChart: (seed = null) => GameSimulation.initChart(Game, seed),
+  getCurrentAt: (x = Game.chartX, z = Game.chartZ) =>
+    GameSimulation.getCurrentAt(Game.worldSeed, x, z),
+  getWindAt: () => GameSimulation.getWindAt(Game),
+  evaluateChartRegion: () => GameSimulation.evaluateChartRegion(Game),
 
   // Meshes auxiliares
   ghostMesh: null,
@@ -196,7 +236,7 @@ const Game = {
     }
   },
 
-  newGame: () => {
+  newGame: (seed = null) => {
     if (Game.fishing?.active) Game.cancelFishing(false);
     Game.paused = false;
     Game.day = 1;
@@ -225,7 +265,6 @@ const Game = {
     Log.clear();
 
     Game.rescuedSignal = 0;
-    Game.islandDistance = 2000;
     Game.radioIntel = 0;
     Game.navigationIntel = 0;
     Game.victoryCondition = null;
@@ -237,6 +276,8 @@ const Game = {
     Game.anchorDeployed = false;
     Game.beaconLit = false;
     Game.pendingDayResolution = null;
+    Game.initChart(typeof seed === 'number' ? seed : null);
+    GameSimulation.syncZoneFromChart(Game, true);
     Game.resetTransientState();
     Game.highlightsDirty = true;
 
@@ -302,10 +343,6 @@ const Game = {
       fog: Util.clamp(finite(data.weatherTimers?.fog), 0, 86400),
       heat: Util.clamp(finite(data.weatherTimers?.heat), 0, 86400)
     };
-    Game.storm = Game.zone === 'storm' || Game.weatherTimers.storm > 0;
-    Game.rain = Game.storm || Game.weatherTimers.rain > 0;
-    Game.fog = Game.weatherTimers.fog > 0;
-    Game.heat = Game.weatherTimers.heat > 0;
     Game.resetPlayerState(data.player);
     const savedResources = data.resources || {};
     Game.resources = {};
@@ -322,10 +359,68 @@ const Game = {
         : ''
     };
     Game.rescuedSignal = Util.clamp(finite(data.rescuedSignal), 0, 100);
-    Game.islandDistance = Util.clamp(finite(data.islandDistance, 2000), 0, 10000000);
     Game.radioIntel = Util.clamp(finite(data.radioIntel), 0, 40);
     Game.navigationIntel = Util.clamp(finite(data.navigationIntel), 0, 120);
     Game.victoryCondition = ['radio', 'island'].includes(data.victoryCondition) ? data.victoryCondition : null;
+
+    const savedSeed = finite(data.worldSeed, finite(data.seed, 1));
+    Game.initChart(savedSeed > 0 ? savedSeed : 1);
+    if (Number.isFinite(Number(data.islandX)) && Number.isFinite(Number(data.islandZ))) {
+      Game.islandX = Util.clamp(Number(data.islandX), -10000000, 10000000);
+      Game.islandZ = Util.clamp(Number(data.islandZ), -10000000, 10000000);
+      Game.islandBearing = Math.atan2(Game.islandZ, Game.islandX);
+    }
+    Game.islandRevealed =
+      data.islandRevealed === true || Game.victoryCondition === 'island';
+    Game.islandIntelApplied = Util.clamp(finite(data.islandIntelApplied), 0, 120);
+
+    if (Array.isArray(data.regions) && data.regions.length > 0) {
+      Game.regions = data.regions
+        .filter(r => r && typeof r === 'object' && CHART_REGION_TYPES.includes(r.type))
+        .slice(0, 32)
+        .map((r, idx) => ({
+          id: typeof r.id === 'string' && r.id ? r.id.slice(0, 64) : `region-${idx}`,
+          type: r.type,
+          x: Util.clamp(finite(r.x), -10000000, 10000000),
+          z: Util.clamp(finite(r.z), -10000000, 10000000),
+          radius: Util.clamp(finite(r.radius, 26), 6, 500),
+          borderWidth: Util.clamp(finite(r.borderWidth, 7), 2, 200),
+          angle: Util.clamp(finite(r.angle), -Math.PI * 2, Math.PI * 2),
+          length: Util.clamp(finite(r.length), 0, 500),
+          visited: r.visited === true,
+          discovered: r.discovered === true,
+          reefsSpawned: r.reefsSpawned === true
+        }));
+      if (Game.regions.length === 0) {
+        Game.regions = GameSimulation.buildRegions(
+          Game.worldSeed,
+          Game.islandX,
+          Game.islandZ
+        );
+      }
+    }
+
+    const hasChartCoords =
+      data.chartX !== undefined && data.chartX !== null &&
+      data.chartZ !== undefined && data.chartZ !== null &&
+      Number.isFinite(Number(data.chartX)) &&
+      Number.isFinite(Number(data.chartZ));
+    if (hasChartCoords) {
+      Game.chartX = Util.clamp(Number(data.chartX), -10000000, 10000000);
+      Game.chartZ = Util.clamp(Number(data.chartZ), -10000000, 10000000);
+    } else {
+      const legacyDist = Util.clamp(finite(data.islandDistance, 300), 0, 10000000);
+      GameSimulation.placeOnIslandLine(Game, legacyDist);
+    }
+    GameSimulation.syncZoneFromChart(Game, true);
+    if (!hasChartCoords && ZONES.includes(data.zone) && Game.zone === 'calm') {
+      Game.zone = data.zone;
+    }
+    Game.storm = Game.zone === 'storm' || Game.weatherTimers.storm > 0;
+    Game.rain = Game.storm || Game.weatherTimers.rain > 0;
+    Game.fog = Game.weatherTimers.fog > 0;
+    Game.heat = Game.weatherTimers.heat > 0;
+
     Game.currentObjective = Util.clamp(
       Math.floor(finite(data.currentObjective)),
       0,
@@ -577,6 +672,27 @@ const Game = {
       zoneTimer: Game.zoneTimer,
       storm: Game.storm,
       weatherTimers: Game.weatherTimers,
+      worldSeed: Game.worldSeed,
+      seed: Game.worldSeed,
+      chartX: Game.chartX,
+      chartZ: Game.chartZ,
+      islandX: Game.islandX,
+      islandZ: Game.islandZ,
+      islandRevealed: Game.islandRevealed === true,
+      islandIntelApplied: Game.islandIntelApplied || 0,
+      regions: (Game.regions || []).map(r => ({
+        id: String(r.id || ''),
+        type: String(r.type || 'debris'),
+        x: Number(r.x) || 0,
+        z: Number(r.z) || 0,
+        radius: Number(r.radius) || 26,
+        borderWidth: Number(r.borderWidth) || 7,
+        angle: Number(r.angle) || 0,
+        length: Number(r.length) || 0,
+        visited: Boolean(r.visited),
+        discovered: Boolean(r.discovered),
+        reefsSpawned: Boolean(r.reefsSpawned)
+      })),
       player: {
         x: Game.player.x, z: Game.player.z,
         health: Game.player.health, hunger: Game.player.hunger,
@@ -1499,17 +1615,8 @@ const Game = {
     Game.heat = Game.weatherTimers.heat > 0;
   },
 
-  updateZone: (dt) => {
-    Game.zoneTimer -= dt;
-    if (Game.zoneTimer <= 0) {
-      Game.zoneTimer = Util.rand(40, 90);
-      const prev = Game.zone;
-      let next = Util.choice(ZONES);
-      if (prev === 'storm' && next === 'storm') next = 'calm';
-      Game.zone = next;
-      Game.showEventMessage(Game.zoneName(next));
-      Log.add(`Entras en ${Game.zoneName(next).toLowerCase()}.`);
-    }
+  updateZone: () => {
+    GameSimulation.syncZoneFromChart(Game, false);
   },
 
   zoneName: (z) => {
@@ -1627,28 +1734,19 @@ const Game = {
       Game.beaconLit = false;
       Log.add('El faro de señales se apagó al quedar inoperativo.');
     }
-    const driftBonus = CrewManager.getDriftBonus();
-    const sailEfficiency = Util.clamp(Game.raft.countProvides('sail'), 0, 1);
-    const rudderEfficiency = Util.clamp(Game.raft.countProvides('rudder'), 0, 1);
-    const motorEfficiency = Util.clamp(Game.raft.countProvides('motor'), 0, 1);
-    const sailBonus = sailEfficiency * 0.5;
-    const motorBonus = Game.victoryCondition === 'island' &&
-      (Game.resources.fuel || 0) > 0
-      ? motorEfficiency
-      : 0;
-    const loadMul = Game.loadSpeedMultiplier();
-    const anchored = Game.anchorDeployed &&
-      Game.raft.countProvides('anchor') > 0;
-    const currentSpeed = anchored
-      ? 0
-      : (0.75 + driftBonus * 0.75 + sailBonus + motorBonus + Game.rowingBoost) * loadMul;
-    const steeringSpeed = (sailBonus + motorBonus) * rudderEfficiency *
-      Game.navigationHeading * NAVIGATION_BALANCE.lateralSteering;
-    const currentSpeedZ = anchored
-      ? 0
-      : (Game.rowingBoostZ + steeringSpeed) * loadMul;
+    const velocity = GameSimulation.computeChartVelocity(Game);
+    const currentSpeed = velocity.vx;
+    const currentSpeedZ = velocity.vz;
+    if (Game._routeFixGrace > 0 && dt < 0.1) {
+      Game._routeFixGrace = Math.max(0, Game._routeFixGrace - dt);
+    } else {
+      Game._routeFixGrace = 0;
+      Game.chartX += currentSpeed * dt;
+      Game.chartZ += currentSpeedZ * dt;
+    }
     Game.worldOffset += currentSpeed * dt;
     Game.worldOffsetZ += currentSpeedZ * dt;
+    GameSimulation.syncZoneFromChart(Game, false);
 
     const center = Game.raft.getCenter();
     const hazardTargets = Game.getHazardTargets();
@@ -2029,6 +2127,7 @@ const Game = {
       }
     } else if (b.key === 'anchor') {
       Game.anchorDeployed = !Game.anchorDeployed;
+      GameSimulation.computeChartVelocity(Game);
       const state = Game.anchorDeployed ? 'desplegada' : 'recogida';
       Game.showFloatingText(p.x, p.z, `Ancla ${state}`, '#4fc3f7');
       Log.add(`El ancla queda ${state}.`);
@@ -2101,6 +2200,7 @@ const Game = {
           ? index
           : best, 0);
       Game.navigationHeading = headings[(currentIndex + 1) % headings.length];
+      GameSimulation.computeChartVelocity(Game);
       const label = Game.navigationHeading < 0 ? 'babor' : (Game.navigationHeading > 0 ? 'estribor' : 'recto');
       Game.showFloatingText(p.x, p.z, `Rumbo: ${label}`, '#4fc3f7');
       Log.add(`El timón fija el rumbo hacia ${label}.`);

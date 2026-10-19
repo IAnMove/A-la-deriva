@@ -106,4 +106,26 @@ run('EntityManager.reset();');
 assert.equal(run('EntityManager.dangers.length'), 0);
 assert.equal(run('EntityManager.reefs.length'), 0);
 
+run(`
+  var raftForReefsFixture = new Raft();
+  for (let gx = -1; gx <= 2; gx++) {
+    for (let gy = -1; gy <= 2; gy++) {
+      raftForReefsFixture.grid.set(gx + ',' + gy, {
+        buildingKey: 'floor', health: 50, maxHealth: 50, mesh: null
+      });
+    }
+  }
+  var centerForReefsFixture = raftForReefsFixture.getCenter();
+  EntityManager.spawnReefRegionAhead(centerForReefsFixture, raftForReefsFixture);
+`);
+assert.ok(run('EntityManager.reefs.length') >= 3);
+assert.equal(
+  run('EntityManager.reefs.every(r => r.x > centerForReefsFixture.x + 10)'),
+  true
+);
+assert.equal(
+  run('EntityManager.reefs.every(r => !raftForReefsFixture.intersectsCircle(r.x, r.z, r.radius + 1))'),
+  true
+);
+
 console.log('✓ tiburones telegrafiados, defensa con gancho y arrecifes navegables');

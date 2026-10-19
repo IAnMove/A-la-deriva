@@ -414,6 +414,8 @@ function buildStructureMesh(key) {
       clothGroup.add(raftBeam([1.14, 0, 0], [0.114, 1.8, 0], 0.014, rope));
       const patch = box(0.2, 0.25, 0.014, 0xbfa783, 0.4, 0.48, 0.23);
       patch.rotation.z = -0.15; clothGroup.add(patch); g.add(clothGroup);
+      const pennant = new THREE.Group(); pennant.name = 'wind-pennant'; pennant.position.set(-0.34, 2.36, 0);
+      pennant.add(curvedRaftSail(0.42, 0.16, 0xc57554)); g.add(pennant);
       break;
     }
     case 'rudder': {
@@ -518,6 +520,7 @@ function buildStructureMesh(key) {
       C(0.06, 0.11, 2.85, dark, 0, 1.42, 0);
       for (const x of [-0.62, 0.62]) for (const z of [-0.6, 0.6]) beam([0, 2.29, 0], [x, 0.04, z], 0.014, rope);
       const flag = new THREE.Group(); flag.name = 'sail-cloth'; flag.position.set(0.07, 2.3, 0);
+      flag.userData.isPennant = true;
       flag.add(curvedRaftSail(0.69, 0.43, 0xc57554)); g.add(flag);
       for (let i = 0; i < 4; i++) ring(0.11, 0.016, rope, 0, 0.2 + i * 0.06, 0);
       break;
@@ -778,6 +781,7 @@ class Raft {
       cg.userData.animations = {
         flame: structure.getObjectByName('flame'),
         sail: structure.getObjectByName('sail-cloth'),
+        pennant: structure.getObjectByName('wind-pennant'),
         prop: structure.getObjectByName('prop'),
         anchor: structure.getObjectByName('anchor-head'),
         cable: structure.getObjectByName('anchor-rope'),
@@ -817,6 +821,13 @@ class Raft {
   // La flotación del conjunto y las coordenadas físicas las controla World.
   updateVisuals(time = 0, dt = 0, options = {}) {
     const wind = Util.clamp(Number(options.wind) || 0.5, 0, 2);
+    const hasWindVec = Number.isFinite(options.windX) || Number.isFinite(options.windZ);
+    const windAngle = Number.isFinite(options.windAngle)
+      ? Number(options.windAngle)
+      : hasWindVec
+        ? Math.atan2(Number(options.windZ) || 0, Number(options.windX) || 1)
+        : 0;
+    const heading = Util.clamp(Number(options.heading) || 0, -1, 1);
     const delta = Util.clamp(Number(dt) || 0, 0, 0.1);
     for (const cell of this.grid.values()) {
       const animation = cell.mesh?.userData.animations;
@@ -826,14 +837,38 @@ class Raft {
         animation.flame.scale.set(0.92 + Math.sin(time * 9) * 0.08,
           0.87 + Math.sin(time * 12.7) * 0.15, 0.94 + Math.cos(time * 10.1) * 0.06);
         animation.flame.rotation.y = time * 0.4;
+        animation.flame.rotation.z = -Math.cos(windAngle) * 0.16 * wind;
+        animation.flame.rotation.x = Math.sin(windAngle) * 0.16 * wind;
       }
       if (animation.sail) {
-        animation.sail.rotation.y = Math.sin(time * 1.7) * 0.045 * wind;
-        animation.sail.scale.z = 0.78 + Math.sin(time * 2.3) * 0.16 * wind;
+        if (animation.sail.userData?.isPennant || cell.buildingKey === 'mast') {
+          animation.sail.rotation.y =
+            -windAngle + Math.sin(time * (4.2 + wind * 1.8)) * 0.11 * wind;
+          animation.sail.scale.z =
+            0.74 + (0.18 + Math.sin(time * 5.1) * 0.14) * wind;
+        } else {
+          const trimAngle = Util.clamp(
+            -windAngle * 0.58 + heading * 0.24,
+            -0.68,
+            0.68
+          );
+          animation.sail.rotation.y =
+            trimAngle + Math.sin(time * 1.7) * 0.045 * wind;
+          const rel = Math.abs(windAngle - heading * 0.48);
+          const fill = Util.clamp(0.75 + Math.cos(rel) * 0.25, 0.45, 1.1);
+          animation.sail.scale.z =
+            0.74 + (0.22 * fill + Math.sin(time * 2.3) * 0.12) * wind;
+        }
+      }
+      if (animation.pennant) {
+        animation.pennant.rotation.y =
+          -windAngle + Math.sin(time * (5.2 + wind * 2.1)) * 0.14 * wind;
+        animation.pennant.scale.z =
+          0.7 + (0.2 + Math.cos(time * 6.1) * 0.15) * wind;
       }
       if (animation.prop) animation.prop.rotation.x += delta * (options.motorActive ? 19 : 1.4) * efficiency;
       if (animation.rudder) animation.rudder.rotation.y +=
-        ((Util.clamp(Number(options.heading) || 0, -1, 1) * 0.5) - animation.rudder.rotation.y) * Math.min(1, delta * 4);
+        ((heading * 0.5) - animation.rudder.rotation.y) * Math.min(1, delta * 4);
       if (animation.anchor) {
         const targetY = options.anchorDeployed ? -0.85 : 0.03;
         animation.anchor.position.y += (targetY - animation.anchor.position.y) * Math.min(1, delta * 4);
