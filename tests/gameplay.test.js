@@ -1397,8 +1397,8 @@ test('minijuego de pesca pausa el mundo y resuelve captura o escape', () => {
     Game.updateFishing(0);
     Game.fishing.cooldown = 0;
     Game.fishing.marker = Game.fishing.targetCenter;
-    Game.requestFishingPull();
-    Game.updateFishing(0);
+    Input.mouse.clicked = true;
+    Game.update(0);
 
     var foodAfterCatchFixture = Game.resources.food;
     var escapedBankFixture = {
@@ -1417,6 +1417,7 @@ test('minijuego de pesca pausa el mundo y resuelve captura o escape', () => {
   assert.equal(run('fishingBankFixture.takeCalls'), 1);
   assert.equal(run('fishingBankFixture.fishCount'), 2);
   assert.equal(run('fishingHookFixture.returning'), true);
+  assert.equal(run('fishingHookFixture.hasCatch'), true);
   assert.equal(run('foodAfterCatchFixture'), 3);
   assert.equal(run('Game.paused'), false);
   assert.equal(run('escapeStartedFixture'), true);

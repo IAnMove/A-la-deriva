@@ -264,6 +264,9 @@ const GameRenderer = {
         seaTime
       );
     }
+    if (typeof HookVis !== 'undefined' && HookVis.updateLeapingCatches) {
+      HookVis.updateLeapingCatches(characterDt, game.player);
+    }
     CrewManager.syncMeshes(game.raft, characterDt, characterTime);
     GameRenderer.updateActionMarker(game, characterTime);
 

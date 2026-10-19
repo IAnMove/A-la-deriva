@@ -818,7 +818,19 @@ const Game = {
       Game.paused = false;
     };
     const fishingButton = document.getElementById('btn-fishing-pull');
-    if (fishingButton) fishingButton.onclick = Game.requestFishingPull;
+    if (fishingButton) {
+      fishingButton.onclick = e => {
+        if (e?.stopPropagation) e.stopPropagation();
+        Game.requestFishingPull();
+      };
+    }
+    const fishingPanel = document.getElementById('fishing-panel');
+    if (fishingPanel) {
+      fishingPanel.onpointerdown = e => {
+        if (e?.button != null && e.button !== 0) return;
+        Game.requestFishingPull();
+      };
+    }
     const conflictPush = document.getElementById('btn-conflict-push');
     if (conflictPush) conflictPush.onclick = Game.requestCrewConflictPush;
     const conflictRation = document.getElementById('btn-conflict-ration');
@@ -1235,7 +1247,9 @@ const Game = {
       Game.cancelFishing(true);
       return;
     }
-    if (Input.wasPressed('Space')) fishing.pullRequested = true;
+    if (Input.wasPressed('Space') || Input.mouse?.clicked) {
+      fishing.pullRequested = true;
+    }
 
     // En primera persona el panel se compacta para no tapar la vista.
     const fpPanel = document.getElementById('fishing-panel');
@@ -1279,6 +1293,9 @@ const Game = {
           ? '¡Pez asegurado!'
           : '¡Buen tirón! Prepárate para el siguiente.';
         AudioSys.play('fish-tug');
+        if (fishing.hook && typeof Particles !== 'undefined' && Particles.emit) {
+          Particles.emit(fishing.hook.x, 0.3, fishing.hook.z, '#e1f5fe', 8, 2.6);
+        }
       } else {
         fishing.misses++;
         fishing.feedback = 'miss';
@@ -1318,6 +1335,7 @@ const Game = {
     if (hook) {
       hook.fishing = false;
       hook.returning = true;
+      hook.life = 0;
     }
 
     if (success) {
@@ -1338,7 +1356,20 @@ const Game = {
         bank.fishCount = Math.max(0, bank.fishCount - 1);
         if (bank.fishCount <= 0) bank.active = false;
       }
+      if (!caughtFish && typeof HookVis !== 'undefined' && HookVis.makeFallbackFish) {
+        caughtFish = HookVis.makeFallbackFish();
+      }
+      if (hook) {
+        hook.hasCatch = true;
+        hook.catchStartDist = Math.max(
+          1.2,
+          Util.dist2(hook.x, hook.z, Game.player.x, Game.player.z)
+        );
+      }
       if (caughtFish && HookVis.attachCatch) HookVis.attachCatch(caughtFish);
+      if (hook && typeof HookVis !== 'undefined' && HookVis.launchLeapingFish) {
+        HookVis.launchLeapingFish(hook.x, hook.z, Game.player.x, Game.player.z);
+      }
       Game.showFloatingText(hook.x, hook.z, `+${Util.formatAmount(amount, 2)} comida`);
       AudioSys.play('fish-success');
       message = `${message} +${Util.formatAmount(amount, 2)} comida.`;

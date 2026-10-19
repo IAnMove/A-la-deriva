@@ -15,6 +15,9 @@
   - Captura de `bindQuat` real del esqueleto y limpieza por fotograma (`resetUpperBody`) de columna, hombros, cuello, cabeza y muñecas para eliminar las poses retorcidas de los clips exportados.
   - Corrección del signo lateral y pronación de antebrazos en reposo, marcha y tareas de tripulación.
   - Rediseño de proporciones y punto de agarre de la caña (`makeRod`), ciclo completo de lance/espera/recogida/lucha a dos manos con flexión por tramos (`setRodFlex`) y alineación del remo entre ambas manos.
+- [x] **Mejora de controles y puesta en escena de la pesca (`hook.js`, `game.js`, `game-renderer.js`, `index.html`)**
+  - Soporte de clic izquierdo del ratón y botón dedicado (`#btn-fishing-pull` / `#fishing-panel`) además de `ESPACIO` para tirar durante el forcejeo de pesca.
+  - Pez 3D forcejeando bajo la boya con ondas concéntricas durante la picada y salto parabólico 3D fuera del agua con estela de gotas hacia el jugador al completar la captura (`HookVis.launchLeapingFish`).
 
 ## Próximas mejoras planificadas
 - [ ] **1. Carta náutica visual e interactiva en la mesa de navegación (`chart`)**

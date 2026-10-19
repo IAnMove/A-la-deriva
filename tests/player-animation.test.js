@@ -100,6 +100,20 @@ run(`
   var tugPoseFixture = PlayerVis.pose;
   var flexFixture = PlayerVis.rodSegments[2].rotation.x;
   var rodTipFixture = PlayerVis.getRodTipWorld(new THREE.Vector3());
+
+  animationPlayerFixture.hook.fishing = false;
+  animationPlayerFixture.hook.returning = true;
+  animationPlayerFixture.hook.hasCatch = true;
+  animationPlayerFixture.hook.catchStartDist = 6;
+  HookVis.attachCatch(HookVis.makeFallbackFish());
+  HookVis.show(1, 1, 4, 1, animationPlayerFixture.hook);
+  var catchArcHeightFixture =
+    HookVis.line.geometry.attributes.position.getY(HookVis.lineSegments - 1);
+  var leapEntryFixture = HookVis.launchLeapingFish(5, 1, 1, 1);
+  HookVis.updateLeapingCatches(0.44, animationPlayerFixture);
+  var leapMidAirYFixture = leapEntryFixture.mesh.position.y;
+  HookVis.updateLeapingCatches(0.5, animationPlayerFixture);
+  var leapFinishedCountFixture = HookVis.leapingCatches.length;
 `);
 
 assert.ok(run('animationPartsFixture.forearmL'));
@@ -118,6 +132,9 @@ assert.ok(Math.abs(run('returnEndpointHeightFixture') - 0.38) < 0.001);
 assert.equal(run('tugPoseFixture'), 'fishing-pull');
 assert.ok(run('flexFixture > 0.05'));
 assert.ok(run('Number.isFinite(rodTipFixture.x) && Number.isFinite(rodTipFixture.y)'));
+assert.ok(run('catchArcHeightFixture > 1.2'));
+assert.ok(run('leapMidAirYFixture > 1.5'));
+assert.equal(run('leapFinishedCountFixture'), 0);
 
 console.log('✓ personaje articulado y ciclo visual completo de pesca');
 
