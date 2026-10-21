@@ -22,6 +22,7 @@ const PlayerVis = {
   tugSuccess: true,
   pose: 'idle',
   glbRig: null,
+  paddle: null,
 
   // Ajuste de posición de la caña respecto al hueso RightHand del rig GLB.
   rodGripOffset: null,
@@ -61,47 +62,52 @@ const PlayerVis = {
     const rod = new THREE.Group();
     rod.name = 'fishing-rod';
     rod.position.set(0, -0.015, 0.015);
-    rod.rotation.z = -0.08;
+    rod.rotation.z = -0.06;
 
-    const handle = cyl(0.045, 0.052, 0.3, 0x5d4037, 0, -0.13, 0, 8);
-    const gripTop = cyl(0.052, 0.052, 0.05, 0x263238, 0, 0.025, 0, 8);
-    rod.add(handle, gripTop);
+    // Mango de corcho/madera: el origen (0,0,0) coincide con el agarre de la
+    // mano derecha; la culata sobresale hacia +Y (bajo el antebrazo) y el
+    // asiento del carrete queda delante de la mano (-Y).
+    const handle = cyl(0.021, 0.025, 0.28, 0x6d4c41, 0, 0.03, 0, 8);
+    const buttCap = cyl(0.025, 0.023, 0.035, 0x263238, 0, 0.175, 0, 8);
+    const foreGrip = cyl(0.019, 0.023, 0.06, 0x263238, 0, -0.11, 0, 8);
+    rod.add(handle, buttCap, foreGrip);
 
     const reel = new THREE.Group();
     reel.name = 'fishing-reel';
-    reel.position.set(-0.095, -0.24, 0.015);
+    reel.position.set(0, -0.085, -0.038);
     const spool = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.085, 0.085, 0.1, 10),
+      new THREE.CylinderGeometry(0.042, 0.042, 0.055, 10),
       mat(0xb0bec5)
     );
     spool.rotation.z = Math.PI / 2;
     spool.castShadow = true;
     const reelCore = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.04, 0.04, 0.13, 8),
+      new THREE.CylinderGeometry(0.022, 0.022, 0.075, 8),
       mat(0x455a64)
     );
     reelCore.rotation.z = Math.PI / 2;
-    reel.add(spool, reelCore);
+    const reelFoot = box(0.016, 0.045, 0.03, 0x37474f, 0, 0, 0.022);
+    reel.add(spool, reelCore, reelFoot);
     rod.add(reel);
 
     const crank = new THREE.Group();
-    crank.position.set(-0.16, -0.24, 0.015);
+    crank.position.set(0.052, -0.085, -0.038);
     crank.add(
-      box(0.035, 0.17, 0.035, 0x37474f, 0, -0.065, 0),
-      cyl(0.035, 0.035, 0.08, 0x5d4037, 0, -0.17, 0, 7)
+      box(0.018, 0.09, 0.018, 0x37474f, 0, -0.035, 0),
+      cyl(0.016, 0.016, 0.045, 0x5d4037, 0.018, -0.08, 0, 7)
     );
     rod.add(crank);
 
     // Tres tramos anidados permiten flexionar la caña sin regenerar geometría.
-    const lengths = [0.38, 0.36, 0.34];
+    const lengths = [0.42, 0.4, 0.38];
     const radii = [
-      [0.025, 0.035],
-      [0.017, 0.026],
-      [0.009, 0.018]
+      [0.014, 0.02],
+      [0.009, 0.014],
+      [0.005, 0.009]
     ];
     const segments = [];
     let parent = rod;
-    let offset = -0.28;
+    let offset = -0.14;
     lengths.forEach((length, index) => {
       const pivot = new THREE.Group();
       pivot.position.y = offset;
@@ -110,17 +116,18 @@ const PlayerVis = {
         radii[index][0],
         radii[index][1],
         length,
-        index === 2 ? 0x263238 : 0x37474f,
+        index === 2 ? 0xd7ccc8 : 0x37474f,
         0,
         -length * 0.5,
         0,
         7
       );
+      const guideRadius = 0.022 - index * 0.004;
       const guide = new THREE.Mesh(
-        new THREE.TorusGeometry(0.042 - index * 0.008, 0.009, 5, 9),
+        new THREE.TorusGeometry(guideRadius, 0.0038, 5, 9),
         mat(0xcfd8dc)
       );
-      guide.position.y = -length;
+      guide.position.set(0, -length, -guideRadius * 0.65);
       guide.rotation.x = Math.PI / 2;
       guide.castShadow = true;
       pivot.add(shaft, guide);
@@ -157,6 +164,7 @@ const PlayerVis = {
     const parts = PlayerVis.mesh.userData.parts;
     PlayerVis.addPlayerDetails(parts);
     PlayerVis.makeRod(parts.handR || parts.armR);
+    PlayerVis.makePaddle();
 
     const positions = new Float32Array(6);
     const geometry = new THREE.BufferGeometry();
@@ -217,6 +225,163 @@ const PlayerVis = {
     }
   },
 
+  makePaddle: () => {
+    const paddle = new THREE.Group();
+    paddle.name = 'player-paddle';
+    paddle.add(
+      cyl(0.025, 0.032, 1.2, 0x9a7549, 0, -0.26, 0, 7),
+      box(0.24, 0.055, 0.055, 0xc8a66d, 0, 0.34, 0),
+      box(0.2, 0.43, 0.045, 0xb99055, 0, -0.97, 0),
+      box(0.027, 0.37, 0.055, 0x705236, 0, -0.97, 0)
+    );
+    paddle.visible = false;
+    PlayerVis.mesh.add(paddle);
+    PlayerVis.paddle = paddle;
+    PlayerVis.paddleHand = new THREE.Vector3();
+    PlayerVis.paddleDirection = new THREE.Vector3();
+    PlayerVis.paddleAxis = new THREE.Vector3(0, -1, 0);
+  },
+
+  poseGlbLocomotion: (p, time, moving, casting = false) => {
+    if (PlayerVis.fpMode || typeof CrewManager === 'undefined' || !CrewManager.aimLimb) return;
+    const mesh = PlayerVis.mesh, rig = PlayerVis.glbRig;
+    rig.resetUpperBody?.();
+    const aim = (name, x, y, z, roll = 0) => CrewManager.aimLimb(mesh, rig, name, x, y, z, roll);
+    const rowing = (p.rowAnim || 0) > 0;
+    aim('Neck', 0, 0.99, 0.08);
+    const headBone = rig.bone('Head');
+    if (headBone?.userData?.bindQuat) {
+      headBone.quaternion.copy(headBone.userData.bindQuat);
+      headBone.rotateX(-0.08);
+      if (!moving && !p.hook && !rowing) {
+        headBone.rotateY(Math.sin(time * 0.65) * 0.06);
+      }
+    } else {
+      aim('Head', 0, 0.98, 0.15);
+    }
+
+    if (rowing) {
+      // Un ciclo por impulso: alcanzar, palear y recuperar por encima del agua.
+      const phase = (1 - Util.clamp(p.rowAnim / 0.65, 0, 1)) * Math.PI * 2;
+      const reach = Math.cos(phase), recovery = Math.max(0, -Math.sin(phase));
+      mesh.rotation.x = 0.14 + (1 - reach) * 0.055;
+      aim('RightArm', -0.26, -0.66 + recovery * 0.18, 0.7 + reach * 0.32);
+      aim('RightForeArm', -0.16, -0.48 + recovery * 0.32, 0.78 + reach * 0.28, 0.45);
+      aim('LeftArm', 0.1, -0.36 + recovery * 0.12, 0.76 + reach * 0.18);
+      aim('LeftForeArm', -0.18, 0.04 + recovery * 0.16, 0.88 + reach * 0.18, -0.45);
+      const hand = rig.bone('RightHand');
+      const leftHand = rig.bone('LeftHand');
+      if (hand && PlayerVis.paddle) {
+        mesh.updateMatrixWorld(true);
+        hand.getWorldPosition(PlayerVis.paddleHand);
+        mesh.worldToLocal(PlayerVis.paddleHand);
+        PlayerVis.paddle.position.copy(PlayerVis.paddleHand);
+        if (leftHand) {
+          leftHand.getWorldPosition(PlayerVis.paddleDirection);
+          mesh.worldToLocal(PlayerVis.paddleDirection);
+          PlayerVis.paddleDirection.sub(PlayerVis.paddleHand).negate().normalize();
+        } else {
+          PlayerVis.paddleDirection.set(
+            PlayerVis.paddleHand.x - 0.18,
+            -0.38 + recovery * 0.35,
+            0.92 + reach * 0.34
+          ).sub(PlayerVis.paddleHand).normalize();
+        }
+        PlayerVis.paddle.quaternion.setFromUnitVectors(PlayerVis.paddleAxis, PlayerVis.paddleDirection);
+        PlayerVis.paddle.visible = true;
+      }
+      return;
+    }
+
+    if (casting) {
+      const normalized = Util.clamp(PlayerVis.castTime / PlayerVis.castDuration, 0, 1);
+      if (normalized < 0.3) {
+        PlayerVis.pose = 'cast-anticipation';
+        const t = normalized / 0.3;
+        mesh.rotation.x = PlayerVis.mix(0, -0.08, t);
+        mesh.rotation.z = PlayerVis.mix(0, -0.05, t);
+        aim('RightArm', -0.22, PlayerVis.mix(-0.68, 0.08, t), PlayerVis.mix(0.65, 0.72, t));
+        aim('RightForeArm', -0.08, PlayerVis.mix(-0.15, 0.72, t), PlayerVis.mix(0.92, 0.55, t), 0.35);
+        aim('LeftArm', 0.1, PlayerVis.mix(-0.68, -0.24, t), 0.74);
+        aim('LeftForeArm', -0.34, PlayerVis.mix(-0.18, 0.38, t), 0.86, -0.45);
+        PlayerVis.rodPitch = PlayerVis.mix(0.38, 1.18, t);
+        PlayerVis.setRodFlex(-0.38 * t);
+      } else if (normalized < 0.62) {
+        PlayerVis.pose = 'cast-release';
+        const t = (normalized - 0.3) / 0.32;
+        mesh.rotation.x = PlayerVis.mix(-0.08, 0.09, t);
+        mesh.rotation.z = PlayerVis.mix(-0.05, 0.04, t);
+        aim('RightArm', -0.18, PlayerVis.mix(0.08, -0.56, t), PlayerVis.mix(0.72, 0.82, t));
+        aim('RightForeArm', -0.05, PlayerVis.mix(0.72, -0.16, t), PlayerVis.mix(0.55, 0.96, t), 0.35);
+        aim('LeftArm', 0.1, PlayerVis.mix(-0.24, -0.62, t), 0.76);
+        aim('LeftForeArm', -0.34, PlayerVis.mix(0.38, -0.18, t), 0.88, -0.45);
+        PlayerVis.rodPitch = PlayerVis.mix(1.18, 0.2, t);
+        PlayerVis.setRodFlex(Math.sin(t * Math.PI) * 0.92);
+      } else {
+        PlayerVis.pose = 'cast-follow-through';
+        const t = (normalized - 0.62) / 0.38;
+        mesh.rotation.x = PlayerVis.mix(0.09, 0.02, t);
+        mesh.rotation.z = PlayerVis.mix(0.04, 0, t);
+        aim('RightArm', -0.17, PlayerVis.mix(-0.56, -0.7, t), PlayerVis.mix(0.82, 0.68, t));
+        aim('RightForeArm', -0.05, PlayerVis.mix(-0.16, -0.18, t), 0.96, 0.35);
+        aim('LeftArm', 0.1, -0.64, 0.74);
+        aim('LeftForeArm', -0.34, -0.18, 0.88, -0.45);
+        PlayerVis.rodPitch = PlayerVis.mix(0.2, 0.38, t);
+        PlayerVis.setRodFlex(PlayerVis.mix(0.42, 0.1, t));
+      }
+      return;
+    }
+
+    if (p.hook?.fishing) {
+      const pulseProgress = PlayerVis.tugTime > 0 ? 1 - PlayerVis.tugTime / 0.38 : 1;
+      const tug = PlayerVis.tugTime > 0 ? Math.sin(pulseProgress * Math.PI) : 0;
+      const struggle = Math.sin(time * 9.5) * 0.07;
+      const pull = tug * (PlayerVis.tugSuccess ? 0.36 : -0.16);
+      mesh.rotation.x = 0.04 - pull * 0.15;
+      mesh.rotation.z = struggle * 0.12;
+      aim('RightArm', -0.17, -0.58 + pull * 0.32 - struggle * 0.35, 0.78);
+      aim('RightForeArm', -0.05, 0.04 + pull * 0.42 - struggle * 0.45, 0.95, 0.35);
+      aim('LeftArm', 0.1, -0.52 + pull * 0.28 - struggle * 0.25, 0.82);
+      aim('LeftForeArm', -0.35, 0.02 + pull * 0.38 + Math.cos(time * 12) * 0.08, 0.88, -0.45);
+      PlayerVis.rodPitch = 0.56 + pull * 0.42 - struggle * 0.3;
+      PlayerVis.setRodFlex(0.72 + Math.abs(struggle) + tug * 0.42);
+      return;
+    }
+
+    if (p.hook?.returning) {
+      const reelCycle = time * 11;
+      mesh.rotation.x = 0.04;
+      mesh.rotation.z = Math.sin(reelCycle * 0.5) * 0.02;
+      aim('RightArm', -0.17, -0.66 + Math.sin(reelCycle) * 0.04, 0.72);
+      aim('RightForeArm', -0.05, -0.12 + Math.sin(reelCycle) * 0.06, 0.96, 0.35);
+      aim('LeftArm', 0.1, -0.6 + Math.cos(reelCycle) * 0.06, 0.78);
+      aim('LeftForeArm', -0.35 + Math.sin(reelCycle) * 0.04, -0.12 + Math.cos(reelCycle) * 0.1, 0.88, -0.45);
+      PlayerVis.rodPitch = 0.42 + Math.sin(reelCycle) * 0.04;
+      PlayerVis.setRodFlex(0.45 + Math.sin(reelCycle) * 0.08);
+      return;
+    }
+
+    if (p.hook) {
+      const sway = Math.sin(time * 2.0) * 0.025;
+      aim('RightArm', -0.17, -0.72, 0.66);
+      aim('RightForeArm', -0.05, -0.18 + sway, 0.96, 0.35);
+      aim('LeftArm', 0.1, -0.66, 0.74);
+      aim('LeftForeArm', -0.35, -0.18 + sway, 0.88, -0.45);
+      PlayerVis.rodPitch = 0.38 + sway;
+      PlayerVis.setRodFlex(0.1 + Math.sin(time * 2.2) * 0.025);
+      return;
+    }
+
+    const swing = moving ? Math.sin(PlayerVis.walkTime) * 0.38 : Math.sin(time * 1.8) * 0.018;
+    const armY = moving ? -0.96 : -0.985;
+    const foreY = moving ? -0.92 : -0.975;
+    const foreZ = moving ? 0.22 : 0.16;
+    aim('RightArm', -0.14, armY, 0.04 - swing);
+    aim('LeftArm', 0.14, armY, 0.04 + swing);
+    aim('RightForeArm', -0.08, foreY, foreZ - swing * 0.85, 0.38);
+    aim('LeftForeArm', 0.08, foreY, foreZ + swing * 0.85, -0.38);
+  },
+
   syncGlb: (p, dt, time, moving, casting) => {
     const rig = PlayerVis.glbRig;
     const rowing = (p.rowAnim || 0) > 0;
@@ -227,22 +392,18 @@ const PlayerVis = {
       rig.play('Crouch', { timeScale: 0.5 });
     } else if (casting) {
       PlayerVis.pose = 'cast';
-      const clip = rig.actions.Cast ? rig.actions.Cast.getClip() : null;
-      rig.play('Cast', {
-        once: true,
-        timeScale: clip ? clip.duration / PlayerVis.castDuration : 1
-      });
+      rig.play('Idle', { timeScale: 0.7 });
     } else if (p.hook?.fishing) {
       PlayerVis.pose = tug
         ? (PlayerVis.tugSuccess ? 'fishing-pull' : 'fishing-slip')
         : 'fishing-tension';
-      rig.play('Reel', { timeScale: tug ? 1.8 : 0.9 });
+      rig.play('Idle', { timeScale: 0.95 });
     } else if (p.hook?.returning) {
       PlayerVis.pose = 'reeling';
-      rig.play('Reel', { timeScale: 1.5 });
+      rig.play('Idle', { timeScale: 0.85 });
     } else if (p.hook) {
       PlayerVis.pose = 'line-out';
-      rig.play('Idle');
+      rig.play('Idle', { timeScale: 0.75 });
     } else if (moving) {
       PlayerVis.pose = 'walking';
       rig.play('Walk');
@@ -251,6 +412,8 @@ const PlayerVis = {
       rig.play('Idle');
     }
     rig.update(dt);
+    if (PlayerVis.paddle) PlayerVis.paddle.visible = false;
+    PlayerVis.poseGlbLocomotion(p, time, moving, casting);
 
     // En primera persona la cabeza queda oculta; el mezclador puede
     // sobrescribir la escala del hueso, así que se reaplica cada frame.
@@ -259,7 +422,7 @@ const PlayerVis = {
       if (head) head.scale.setScalar(0.0001);
     }
 
-    if (rowing) {
+    if (rowing && PlayerVis.fpMode) {
       // Remar con la mano: sobre la base agachada, el brazo derecho palea.
       const swing = Math.sin(time * 8);
       const arm = rig.bone('RightArm');
@@ -308,9 +471,9 @@ const PlayerVis = {
         PlayerVis.setRodFlex(0);
       }
 
-      // La caña sigue la posición de la mano, pero su orientación se decide
-      // aquí: la punta (-Y local) apunta al anzuelo u objetivo de lance.
-      // Copiar el quaternion del hueso dejaba la caña en ángulos imposibles.
+      // La caña sigue la posición de la mano derecha y apunta hacia delante y
+      // arriba con el ángulo de lance/pesca (PlayerVis.rodPitch), evitando el
+      // giro invertido de setFromUnitVectors y dejando el carrete debajo.
       const hand = rig.bone('RightHand');
       if (hand && PlayerVis.rod) {
         PlayerVis.mesh.updateMatrixWorld(true);
@@ -321,9 +484,8 @@ const PlayerVis = {
         }
 
         const target = p.hook || PlayerVis.castTarget;
-        let dirLocal;
+        let yaw = 0.05;
         if (target) {
-          // Dirección mundo de la mano al agua, llevada al espacio de la malla.
           const targetWorld = new THREE.Vector3(target.x, 0.3, target.z);
           if (PlayerVis.mesh.parent) {
             PlayerVis.mesh.parent.localToWorld(targetWorld);
@@ -332,14 +494,11 @@ const PlayerVis = {
           const invQuat = PlayerVis.mesh
             .getWorldQuaternion(new THREE.Quaternion())
             .invert();
-          dirLocal = dirWorld.applyQuaternion(invQuat);
-        } else {
-          dirLocal = new THREE.Vector3(0, -0.3, 1); // descanso: adelante y caída
+          const dirLocal = dirWorld.applyQuaternion(invQuat);
+          yaw = Util.clamp(Math.atan2(dirLocal.x, Math.max(0.2, dirLocal.z)), -0.45, 0.45);
         }
-        PlayerVis.rod.quaternion.setFromUnitVectors(
-          new THREE.Vector3(0, -1, 0),
-          dirLocal
-        );
+        const pitch = typeof PlayerVis.rodPitch === 'number' ? PlayerVis.rodPitch : 0.38;
+        PlayerVis.rod.rotation.set(-(Math.PI * 0.5 + pitch), yaw, -0.06, 'YXZ');
       }
     }
   },
@@ -354,6 +513,7 @@ const PlayerVis = {
     PlayerVis.pose = 'idle';
     if (PlayerVis.glbRig) PlayerVis.glbRig.play('Idle');
     if (PlayerVis.rod) PlayerVis.rod.visible = false;
+    if (PlayerVis.paddle) PlayerVis.paddle.visible = false;
     if (PlayerVis.mesh) PlayerVis.mesh.position.set(1, 0.35, 1);
     if (PlayerVis.aimLine) PlayerVis.aimLine.visible = false;
   },
@@ -578,6 +738,7 @@ const PlayerVis = {
     if ((p.rowAnim || 0) > 0) {
       PlayerVis.pose = 'rowing';
       if (PlayerVis.rod) PlayerVis.rod.visible = false;
+    if (PlayerVis.paddle) PlayerVis.paddle.visible = false;
       const rowSwing = Math.sin(visualTime * 8) * 0.35;
       parts.armL.rotation.x = -1.1 + rowSwing;
       parts.armR.rotation.x = -1.1 + rowSwing;

@@ -3,6 +3,9 @@ const { test, expect } = require('@playwright/test');
 async function openOffline(page) {
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.message));
+  page.on('console', message => {
+    if (message.type() === 'error' && !message.text().includes('Failed to load resource:')) pageErrors.push(message.text());
+  });
   await page.route(/^https?:\/\/(?!127\.0\.0\.1:4173)/, route => route.abort());
   await page.goto('/');
   await expect(page.locator('#start-screen')).toHaveClass(/active/);
@@ -278,7 +281,7 @@ test('recorre balsas cóncavas y permite partir solo con vela y timón', async (
     Game.resources.fuel = 0;
     Game.resources.plastic = 0;
     Game.victoryCondition = null;
-    Game.islandDistance = 2000;
+    Game.initChart(Game.worldSeed);
     Game.interact();
   });
   await expect(page.locator('#decision-panel')).toBeVisible();

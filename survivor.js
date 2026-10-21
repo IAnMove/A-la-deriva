@@ -339,6 +339,7 @@ class Survivor {
     this.lastIncident = '';
     this.lastFoodRatio = 1;
     this.lastWaterRatio = 1;
+    this.lastTalkDay = -1;
     this.gx = null;
     this.gy = null;
     this.mesh = null;
@@ -390,6 +391,7 @@ class Survivor {
       : '';
     s.lastFoodRatio = Util.clamp(finiteNumber(data?.lastFoodRatio, 1), 0, 1);
     s.lastWaterRatio = Util.clamp(finiteNumber(data?.lastWaterRatio, 1), 0, 1);
+    s.lastTalkDay = Util.clamp(Math.floor(finiteNumber(data?.lastTalkDay, -1)), -1, 1000000);
     s.days = Util.clamp(Math.floor(finiteNumber(data?.days, 0)), 0, 1000000);
     s.gx = Number.isInteger(data?.gx) && Math.abs(data.gx) <= 1000
       ? data.gx
@@ -533,6 +535,8 @@ class Survivor {
     if (this.hallucinating) {
       return { key: 'delirious', label: 'Alucinando', level: 'critical' };
     }
+    if (this.health < 25) return { key: 'injured', label: 'Herido grave', level: 'critical' };
+    if (this.health < 50) return { key: 'injured', label: 'Herido', level: 'warning' };
     if (this.thirst < 25 || this.hunger < 25 || this.stress >= 70) {
       return { key: 'desperate', label: 'Desesperado', level: 'warning' };
     }
@@ -546,10 +550,12 @@ class Survivor {
 const CrewManager = {
   MAX_MEMBERS: 64,
   members: [],
+  pendingInteractions: new WeakMap(),
 
   reset: () => {
     for (const m of CrewManager.members) CrewManager.removeMesh(m);
     CrewManager.members = [];
+    CrewManager.pendingInteractions = new WeakMap();
   },
 
   add: (survivor) => {
@@ -570,9 +576,9 @@ const CrewManager = {
       if (m.mesh.userData.glbRig) {
         m.mesh.userData.glbRig.mixer.stopAllAction();
       }
-      if (!shared) {
+      if (!shared || m.mesh.userData.workProps) {
         m.mesh.traverse(o => {
-          if (o.geometry && o.geometry.dispose) o.geometry.dispose();
+          if (o.geometry && o.geometry.dispose && (!shared || o === m.mesh.userData.workProps || o.parent?.userData.crewOwned || o.parent?.parent?.userData.crewOwned)) o.geometry.dispose();
         });
       }
     }
@@ -603,107 +609,513 @@ const CrewManager = {
     };
   },
 
-  // Crea/actualiza las figuras 3D de la tripulación sobre la balsa
-  syncMeshes: (raft) => {
-    const cs = raft.cellSize;
-    for (const member of CrewManager.members) {
-      if (!member.alive) {
-        CrewManager.removeMesh(member);
-        continue;
+  // Las rutas solo cruzan bordes de tablas conectadas: nunca agua ni diagonales.
+  findDeckPath: (raft, start, goal) => {
+    if (!raft?.has(start?.gx, start?.gy) || !raft.has(goal?.gx, goal?.gy)) return [];
+    const origin = `${start.gx},${start.gy}`;
+    const destination = `${goal.gx},${goal.gy}`;
+    const queue = [origin];
+    const parents = new Map([[origin, null]]);
+    for (let index = 0; index < queue.length; index++) {
+      const key = queue[index];
+      if (key === destination) {
+        const path = [];
+        let cursor = destination;
+        while (cursor !== origin) {
+          const [gx, gy] = cursor.split(',').map(Number);
+          path.unshift({ gx, gy });
+          cursor = parents.get(cursor);
+        }
+        return path;
       }
+      const [gx, gy] = key.split(',').map(Number);
+      for (const [dx, dy] of [[1, 0], [0, 1], [-1, 0], [0, -1]]) {
+        const next = `${gx + dx},${gy + dy}`;
+        if (raft.has(gx + dx, gy + dy) && !parents.has(next)) {
+          parents.set(next, key);
+          queue.push(next);
+        }
+      }
+    }
+    return [];
+  },
+
+  // Una tarea tiene un lugar y una dirección: atendemos el equipo desde su
+  // costado y dejamos el centro libre, en vez de atravesar hogueras o camas.
+  getDeckPoint: (raft, node) => {
+    const cell = raft.grid.get(`${node.gx},${node.gy}`);
+    const margin = cell && !['floor', 'armor'].includes(cell.buildingKey) ? -raft.cellSize * 0.28 : 0;
+    return { x: (node.gx + 0.5) * raft.cellSize + margin, z: (node.gy + 0.5) * raft.cellSize + margin };
+  },
+
+  getWorkPlan: (member, raft, cycle = 0) => {
+    const cs = raft.cellSize;
+    const job = member.health < 25 || member.restrainedDays > 0 || member.hallucinating
+      ? 'rest' : member.job;
+    const stations = {
+      fish: ['net'], water: ['purifier', 'rain'], salvage: ['storage', 'net'],
+      repair: [], care: ['infirmary'], navigate: ['rudder', 'chart', 'radio'],
+      guard: ['lookout'], cook: ['fire', 'smokehouse'], rest: ['bed', 'bunk']
+    }[job] || [];
+    const entries = Array.from(raft.grid.entries()).map(([key, cell]) => {
+      const [gx, gy] = key.split(',').map(Number);
+      return { gx, gy, cell };
+    });
+    const patient = job === 'care'
+      ? CrewManager.members.filter(other => other !== member && other.alive && other.health < 85)
+        .sort((a, b) => a.health - b.health)[0] : null;
+    const distances = new Map([[`${member.gx},${member.gy}`, 0]]);
+    const queue = [{ gx: member.gx, gy: member.gy }];
+    for (let index = 0; index < queue.length; index++) {
+      const node = queue[index];
+      const distance = distances.get(`${node.gx},${node.gy}`);
+      for (const [dx, dy] of [[1, 0], [0, 1], [-1, 0], [0, -1]]) {
+        const gx = node.gx + dx, gy = node.gy + dy, key = `${gx},${gy}`;
+        if (raft.has(gx, gy) && !distances.has(key)) {
+          distances.set(key, distance + 1); queue.push({ gx, gy });
+        }
+      }
+    }
+    let best = null;
+    for (const candidate of entries) {
+      const { gx, gy, cell } = candidate;
+      const distance = distances.get(`${gx},${gy}`);
+      if (distance == null) continue;
+      const emptyDeck = ['floor', 'armor'].includes(cell.buildingKey);
+      let score = emptyDeck ? 3 : -3;
+      let face = null;
+      let offset = emptyDeck ? { x: 0, z: 0 } : { x: -cs * 0.32, z: -cs * 0.32 };
+      let stationScore = -Infinity;
+      const occupied = CrewManager.members.filter(other => other.alive && other !== member &&
+        ((other.gx === gx && other.gy === gy) ||
+         (other.mesh?.userData.routine?.goal?.gx === gx && other.mesh?.userData.routine?.goal?.gy === gy))).length;
+      score -= occupied * 6;
+      score -= distance * 0.3;
+      score += crewBehaviorRoll(member, cycle, `${gx},${gy}`) * 1.3;
+      for (const [dx, dy] of [[1, 0], [0, 1], [-1, 0], [0, -1], [0, 0]]) {
+        const adjacent = raft.grid.get(`${gx + dx},${gy + dy}`);
+        if (!adjacent) {
+          if (['fish', 'salvage', 'guard', 'navigate', 'water'].includes(job) && stationScore < 4) {
+            stationScore = 4;
+            face = { x: (gx + 0.5 + dx) * cs, z: (gy + 0.5 + dy) * cs };
+            offset = { x: dx * cs * 0.16, z: dy * cs * 0.16 };
+          }
+          continue;
+        }
+        let relevance = stations.includes(adjacent.buildingKey) ? 9 : -Infinity;
+        if (job === 'repair' && adjacent.health < (adjacent.maxHealth || adjacent.health)) {
+          relevance = 8 + (1 - adjacent.health / adjacent.maxHealth) * 6;
+        }
+        if (relevance > stationScore) {
+          stationScore = relevance;
+          face = { x: (gx + dx + 0.5) * cs, z: (gy + dy + 0.5) * cs };
+          offset = dx || dy ? { x: dx * cs * 0.16, z: dy * cs * 0.16 }
+            : { x: -cs * 0.33, z: -cs * 0.33 };
+        }
+      }
+      if (Number.isFinite(stationScore)) score += stationScore;
+      if (patient && Number.isFinite(patient.gx) && Number.isFinite(patient.gy)) {
+        const distance = Math.abs(gx - patient.gx) + Math.abs(gy - patient.gy);
+        score += Math.max(0, 18 - distance * 6);
+        face = patient;
+      }
+      if (job === 'rest' && !face) score += emptyDeck ? 2 : 0;
+      if (!best || score > best.score) best = { gx, gy, path: [], face, offset, job, score };
+    }
+    if (best) best.path = CrewManager.findDeckPath(raft, member, best);
+    return best;
+  },
+
+  getActivity: member => {
+    if (!member?.alive) return 'Fallecido';
+    if (member.hostile) return 'En crisis';
+    if (member.restrainedDays > 0) return 'Bajo vigilancia';
+    const routine = member.mesh?.userData.routine;
+    if (routine?.interaction) {
+      return { talk: 'Conversando', ration: 'Compartiendo provisiones', care: 'Recibiendo cuidados',
+        rest: 'Tomando un respiro', welcome: 'Saludando a bordo' }[routine.interaction.kind] || 'Colaborando';
+    }
+    if (routine?.moving) return 'Yendo a su puesto';
+    return {
+      fish: 'Pescando junto al borde', water: 'Recogiendo agua', salvage: 'Buscando materiales',
+      repair: 'Revisando las tablas', care: 'Atendiendo a sus compañeros', navigate: 'Observando el rumbo',
+      guard: 'Vigilando el horizonte', cook: 'Preparando raciones', rest: 'Descansando'
+    }[routine?.job || member.job] || 'A bordo';
+  },
+
+  signalInteraction: (member, kind = 'talk', target = null, duration = 5) => {
+    if (!member?.alive) return false;
+    const interaction = { kind, target: target || (typeof Game !== 'undefined' ? Game.player : null),
+      remaining: Util.clamp(finiteNumber(duration, 5), 0.5, 12) };
+    const routine = member.mesh?.userData.routine;
+    if (!routine) {
+      CrewManager.pendingInteractions.set(member, interaction);
+      return true;
+    }
+    routine.interaction = interaction;
+    routine.moving = false;
+    return true;
+  },
+  syncMeshes: (raft, dt = 0, time = 0) => {
+    if (!raft?.group) return;
+    const safeDt = Util.clamp(finiteNumber(dt), 0, 0.1);
+    const cs = raft.cellSize;
+    const crew = CrewManager.members.filter(member => member.alive);
+    for (const member of CrewManager.members) {
+      if (!member.alive) { CrewManager.removeMesh(member); continue; }
       if (member.gx == null || !raft.has(member.gx, member.gy)) {
         CrewManager.assignPosition(member, raft);
+        if (member.mesh) member.mesh.userData.routine = null;
       }
-    }
-    const occupantsByCell = new Map();
-    for (const member of CrewManager.members) {
-      if (!member.alive || member.gx == null || member.gy == null) continue;
-      const key = `${member.gx},${member.gy}`;
-      if (!occupantsByCell.has(key)) occupantsByCell.set(key, []);
-      occupantsByCell.get(key).push(member);
-    }
-    for (const m of CrewManager.members) {
-      if (!m.alive || m.gx == null) continue;
-      if (!m.mesh) {
-        // Si la biblioteca de náufragos GLB está cargada, el miembro es un
-        // clon animado; si no, se usa el humanoide de cajas de siempre.
-        const glbMesh =
-          typeof NaufragoGLB !== 'undefined' && NaufragoGLB.createCrewMember
-            ? NaufragoGLB.createCrewMember(CrewManager.members.indexOf(m))
-            : null;
-        m.mesh = glbMesh || makeHumanoidMesh(0xd84315, { hair: Util.choice([0x4e342e, 0x212121, 0x8d6e63, 0x6d4c41, 0x5d4037]) });
-        raft.group.add(m.mesh);
-        m.mesh.userData.phase = Math.random() * Math.PI * 2;
+      if (member.gx == null) { CrewManager.removeMesh(member); continue; }
+      if (!member.mesh) {
+        const index = CrewManager.members.indexOf(member);
+        const glb = typeof NaufragoGLB !== 'undefined' && NaufragoGLB.createCrewMember
+          ? NaufragoGLB.createCrewMember(index) : null;
+        const shirts = [0xd85f40, 0x3e8291, 0xc6a14b, 0x738452, 0x756895, 0xe4b896];
+        member.mesh = glb || makeHumanoidMesh(shirts[index % shirts.length], {
+          hair: [0x4e342e, 0x212121, 0x8d6e63, 0x6d4c41][index % 4]
+        });
+        member.mesh.userData.phase = crewBehaviorRoll(member, 0) * Math.PI * 2;
+        member.mesh.userData.crewMemberIndex = index;
+        raft.group.add(member.mesh);
+        CrewManager.addWorkProps(member.mesh);
       }
-      // Balanceo suave en reposo
-      const sway = Math.sin(performance.now() / 600 + m.mesh.userData.phase) * 0.02;
-      const offset = CrewManager.getVisualOffset(
-        m,
-        raft,
-        occupantsByCell.get(`${m.gx},${m.gy}`) || [m]
-      );
-      m.mesh.position.set(
-        (m.gx + 0.5) * cs + offset.x,
-        0.35 + Math.abs(sway),
-        (m.gy + 0.5) * cs + offset.z
-      );
-      const glbRig = m.mesh.userData.glbRig;
-      if (glbRig) {
-        const nowMs = performance.now();
-        const lastMs = m.mesh.userData.glbLast || nowMs;
-        m.mesh.userData.glbLast = nowMs;
-        // Los hostiles se agitan con el clip de tirar del sedal.
-        glbRig.play(m.hostile ? 'Reel' : 'Idle', m.hostile ? { timeScale: 1.3 } : undefined);
-        glbRig.update(Math.min(0.1, (nowMs - lastMs) / 1000));
+      const mesh = member.mesh;
+      if (!mesh.userData.routine) {
+        const offset = CrewManager.getVisualOffset(member, raft);
+        mesh.position.set((member.gx + 0.5) * cs + offset.x, 0.35, (member.gy + 0.5) * cs + offset.z);
+        mesh.userData.routine = { job: '', goal: null, path: [], timer: 0, cycle: 0,
+          moving: false, socialCooldown: 10 + crewBehaviorRoll(member, 0, 9) * 12, interaction: null };
       }
-      const parts = m.mesh.userData.parts;
-      if (m.hostile && parts) {
-        parts.armL.rotation.x = -1.1 + Math.sin(performance.now() / 95) * 0.22;
-        parts.armR.rotation.x = -1.1 - Math.sin(performance.now() / 95) * 0.22;
-        parts.head.rotation.y = Math.sin(performance.now() / 80) * 0.35;
-        const playerAngle = Math.atan2(
-          Game.player.x - m.mesh.position.x,
-          Game.player.z - m.mesh.position.z
-        );
-        m.mesh.rotation.y += (playerAngle - m.mesh.rotation.y) * 0.12;
-      } else {
-        if (parts) {
-          parts.armL.rotation.x *= 0.86;
-          parts.armR.rotation.x *= 0.86;
-          parts.head.rotation.y = m.hallucinating
-            ? Math.sin(performance.now() / 130) * 0.55
-            : parts.head.rotation.y * 0.86;
+      const routine = mesh.userData.routine;
+      const pendingInteraction = CrewManager.pendingInteractions.get(member);
+      if (pendingInteraction) {
+        routine.interaction = pendingInteraction;
+        CrewManager.pendingInteractions.delete(member);
+      }
+      routine.timer -= safeDt;
+      routine.socialCooldown -= safeDt;
+      if (routine.interaction) {
+        routine.interaction.remaining -= safeDt;
+        if (routine.interaction.remaining <= 0) routine.interaction = null;
+      }
+      if (member.hostile || member.restrainedDays > 0) routine.interaction = null;
+      const urgentRest = member.health < 25 || member.restrainedDays > 0 || member.hallucinating;
+      const expectedJob = urgentRest ? 'rest' : member.job;
+      const invalidPath = routine.path.some(node => !raft.has(node.gx, node.gy));
+      if (routine.job !== expectedJob || invalidPath || (!routine.path.length && routine.timer <= 0)) {
+        const plan = CrewManager.getWorkPlan(member, raft, routine.cycle++);
+        if (plan) {
+          routine.goal = plan;
+          routine.path = plan.path.slice();
+          routine.job = plan.job;
+          routine.timer = 14 + crewBehaviorRoll(member, routine.cycle, 4) * 14;
         }
-        const restless = m.hallucinating
-          ? Math.sin(performance.now() / 170) * 0.18
-          : 0;
-        m.mesh.rotation.y += (
-          m.mesh.userData.phase + Math.PI + restless - m.mesh.rotation.y
-        ) * 0.03;
       }
+      routine.moving = false;
+      let target = null;
+      if (!routine.interaction && !member.hostile && member.restrainedDays <= 0 && routine.goal) {
+        const node = routine.path[0];
+        // Cada esquina se alcanza antes del siguiente segmento. El margen
+        // del destino permite trabajar desde un lateral del módulo ocupado.
+        target = node ? CrewManager.getDeckPoint(raft, node)
+          : { x: (routine.goal.gx + 0.5) * cs + routine.goal.offset.x,
+            z: (routine.goal.gy + 0.5) * cs + routine.goal.offset.z };
+        const dx = target.x - mesh.position.x;
+        const dz = target.z - mesh.position.z;
+        const distance = Math.hypot(dx, dz);
+        if (distance > 0.045 && safeDt > 0) {
+          const speed = (member.health < 40 ? 0.43 : 0.8) * safeDt;
+          const step = Math.min(distance, speed);
+          const x = mesh.position.x + dx / distance * step;
+          const z = mesh.position.z + dz / distance * step;
+          const nextCell = raft.worldToGrid(x, z);
+          if (raft.has(nextCell.gx, nextCell.gy)) {
+            mesh.position.x = x; mesh.position.z = z;
+            member.gx = nextCell.gx; member.gy = nextCell.gy;
+            routine.moving = true;
+          }
+        } else if (node && distance <= 0.045) routine.path.shift();
+      }
+      // Dos compañeros estables se detienen unos segundos y se responden.
+      // Los beneficios sociales se resuelven al terminar el día, nunca por frame.
+      if (safeDt > 0 && !routine.moving && !routine.interaction && routine.socialCooldown <= 0 &&
+          !member.hostile && !member.hallucinating && member.restrainedDays <= 0 && routine.job !== 'rest') {
+        routine.socialCooldown = 20 + crewBehaviorRoll(member, routine.cycle, 8) * 16;
+        const companion = crew.find(other => {
+          const state = other.mesh?.userData.routine;
+          return other !== member && state && !state.interaction && !state.moving &&
+            !other.hostile && !other.hallucinating && other.restrainedDays <= 0 &&
+            Math.hypot(other.mesh.position.x - mesh.position.x, other.mesh.position.z - mesh.position.z) < 2.6;
+        });
+        if (companion) {
+          const caring = member.job === 'care' && companion.health < 85;
+          CrewManager.signalInteraction(member, caring ? 'care' : 'talk', companion, 4.5);
+          CrewManager.signalInteraction(companion, caring ? 'care' : 'talk', member, 4.5);
+          companion.mesh.userData.routine.socialCooldown = 26;
+        }
+      }
+      CrewManager.separateOnDeck(member, crew, raft, safeDt);
+      let face = routine.moving ? target : routine.interaction?.target || routine.goal?.face;
+      if (member.hostile && typeof Game !== 'undefined') face = Game.player;
+      let faceX = face?.mesh?.position?.x ?? face?.x;
+      let faceZ = face?.mesh?.position?.z ?? face?.z;
+      if (!Number.isFinite(faceX) && Number.isFinite(face?.gx)) {
+        faceX = (face.gx + 0.5) * cs; faceZ = (face.gy + 0.5) * cs;
+      }
+      const angle = Number.isFinite(faceX) && Number.isFinite(faceZ)
+        ? Math.atan2(faceX - mesh.position.x, faceZ - mesh.position.z)
+        : mesh.userData.phase + Math.PI;
+      const delta = Math.atan2(Math.sin(angle - mesh.rotation.y), Math.cos(angle - mesh.rotation.y));
+      mesh.rotation.y += delta * (1 - Math.exp(-safeDt * 7));
+      CrewManager.animateMember(member, safeDt, finiteNumber(time));
+    }
+  },
+
+  addWorkProps: mesh => {
+    const props = new THREE.Group();
+    props.name = 'crew-work-props';
+    props.userData.crewOwned = true;
+    mesh.add(props);
+    const rod = new THREE.Group();
+    rod.name = 'fish';
+    const shaft = cyl(0.019, 0.03, 1.15, 0x8d6e45, 0, 0.42, 0.32, 6);
+    shaft.rotation.x = 0.65;
+    rod.add(shaft, cyl(0.006, 0.006, 1.5, 0xdac8a2, 0, 0.08, 0.68, 4));
+    props.add(rod);
+    const hammer = new THREE.Group();
+    hammer.name = 'repair';
+    hammer.add(cyl(0.028, 0.032, 0.35, 0x795548, 0, 0.1, 0, 6));
+    hammer.add(box(0.23, 0.12, 0.13, 0x647179, 0, 0.3, 0));
+    props.add(hammer);
+    const cup = new THREE.Group();
+    cup.name = 'water';
+    cup.add(cyl(0.1, 0.075, 0.2, 0x78a8bb, 0, 0.08, 0.02, 8));
+    props.add(cup);
+    const ration = new THREE.Group();
+    ration.name = 'cook';
+    ration.add(box(0.26, 0.045, 0.24, 0x916540, 0, 0.01, 0.1));
+    ration.add(box(0.12, 0.09, 0.12, 0xdcb56e, 0, 0.07, 0.1));
+    props.add(ration);
+    const medical = new THREE.Group();
+    medical.name = 'care';
+    medical.add(box(0.24, 0.19, 0.13, 0xebeadc, 0, 0.04, 0));
+    medical.add(box(0.12, 0.035, 0.015, 0xc9554d, 0, 0.04, 0.075));
+    medical.add(box(0.035, 0.12, 0.015, 0xc9554d, 0, 0.04, 0.078));
+    props.add(medical);
+    const chart = new THREE.Group();
+    chart.name = 'navigate';
+    chart.add(box(0.28, 0.02, 0.3, 0xe8dab6, 0, 0, 0.12));
+    chart.add(box(0.15, 0.005, 0.025, 0x628d98, 0.02, 0.013, 0.13));
+    props.add(chart);
+    props.children.forEach(prop => { prop.visible = false; });
+    mesh.userData.workProps = props;
+    mesh.userData.handPosition = new THREE.Vector3();
+  },
+
+  // Los GLB originales tienen una pose de brazos abiertos incluso en Idle.
+  // Alineamos el eje longitudinal del hueso partiendo de su bindQuat para que
+  // descansar, escuchar o sujetar una herramienta tenga una silueta natural.
+  aimLimb: (mesh, rig, name, x, y, z, roll = 0) => {
+    const bone = rig.bone?.(name);
+    if (!bone?.parent) return;
+    if (bone.userData && bone.userData.bindQuat) {
+      bone.quaternion.copy(bone.userData.bindQuat);
+    }
+    const scratch = mesh.userData.poseScratch || (mesh.userData.poseScratch = {
+      parentRotation: new THREE.Quaternion(), rootRotation: new THREE.Quaternion(),
+      correction: new THREE.Quaternion(), direction: new THREE.Vector3(), axis: new THREE.Vector3()
+    });
+    bone.parent.getWorldQuaternion(scratch.parentRotation).invert();
+    mesh.getWorldQuaternion(scratch.rootRotation);
+    scratch.direction.set(x, y, z).normalize().applyQuaternion(scratch.rootRotation)
+      .applyQuaternion(scratch.parentRotation);
+    scratch.axis.set(0, 1, 0).applyQuaternion(bone.quaternion).normalize();
+    scratch.correction.setFromUnitVectors(scratch.axis, scratch.direction);
+    bone.quaternion.premultiply(scratch.correction);
+    if (roll) bone.rotateY(roll);
+  },
+
+  animateMember: (member, dt, time) => {
+    if (dt <= 0) return;
+    const mesh = member.mesh;
+    const routine = mesh.userData.routine;
+    const phase = mesh.userData.phase;
+    const t = time + phase;
+    const walking = routine.moving;
+    const interaction = routine.interaction?.kind;
+    const resting = routine.job === 'rest' || member.restrainedDays > 0;
+    const job = routine.job;
+    const working = !walking && !interaction && !resting && !member.hostile;
+    const breath = Math.sin(t * 2.1) * 0.01;
+    mesh.position.y = 0.35 + (walking ? Math.abs(Math.sin(t * 8)) * 0.035 : breath);
+    mesh.rotation.z = member.hostile ? Math.sin(t * 10) * 0.035
+      : walking ? Math.sin(t * 8) * 0.025 : Math.sin(t * 1.6) * 0.015;
+    const rig = mesh.userData.glbRig;
+    if (rig) {
+      const pulse = (t % 7) < 2;
+      const fishing = working && ['fish', 'salvage'].includes(job);
+      const clip = walking ? 'Walk' : member.hostile ? 'Reel' : fishing && pulse ? 'Reel' : 'Idle';
+      rig.play(clip, { timeScale: member.hostile ? 1.1 : walking ? 0.7 : 0.35 });
+      rig.update(dt);
+      rig.resetUpperBody?.();
+      CrewManager.aimLimb(mesh, rig, 'Neck', 0, 0.99, 0.08);
+      const headBone = rig.bone?.('Head');
+      if (headBone?.userData?.bindQuat) {
+        headBone.quaternion.copy(headBone.userData.bindQuat);
+        headBone.rotateX(-0.08);
+      } else {
+        CrewManager.aimLimb(mesh, rig, 'Head', 0, 0.98, 0.15);
+      }
+      if (!member.hostile) {
+        const swing = walking ? Math.sin(t * 8) * 0.35 : 0;
+        const speaking = !!interaction;
+        let rightY = -0.98, rightZ = 0.06 + swing, leftY = -0.98, leftZ = 0.06 - swing;
+        if (fishing) { rightY = -0.55; rightZ = 0.82; leftY = -0.62; leftZ = 0.72; }
+        else if (interaction === 'welcome') { rightY = 0.78; rightZ = 0.32 + Math.sin(t * 6) * 0.12; }
+        else if (speaking) { rightY = -0.62; rightZ = 0.58 + Math.sin(t * 2.5) * 0.06; }
+        else if (working && ['repair', 'cook', 'care', 'water', 'navigate'].includes(job)) {
+          rightY = -0.68; rightZ = 0.65 + (pulse ? Math.sin(t * 3) * 0.1 : 0);
+        }
+        CrewManager.aimLimb(mesh, rig, 'RightArm', -0.14, rightY, rightZ);
+        CrewManager.aimLimb(mesh, rig, 'LeftArm', 0.14, leftY, leftZ);
+        CrewManager.aimLimb(mesh, rig, 'RightForeArm', -0.06, rightY, rightZ + (speaking ? 0.25 : 0.14), 0.38);
+        CrewManager.aimLimb(mesh, rig, 'LeftForeArm', 0.06, leftY, leftZ + 0.14, -0.38);
+        if (!walking && !resting) {
+          CrewManager.aimLimb(mesh, rig, 'RightUpLeg', -0.04, -1, 0.015);
+          CrewManager.aimLimb(mesh, rig, 'LeftUpLeg', 0.04, -1, 0.015);
+          CrewManager.aimLimb(mesh, rig, 'RightLeg', 0, -1, 0);
+          CrewManager.aimLimb(mesh, rig, 'LeftLeg', 0, -1, 0);
+        }
+        if (resting) {
+          CrewManager.aimLimb(mesh, rig, 'RightUpLeg', -0.12, -0.12, 1);
+          CrewManager.aimLimb(mesh, rig, 'LeftUpLeg', 0.12, -0.12, 1);
+          CrewManager.aimLimb(mesh, rig, 'RightLeg', -0.02, -1, 0.12);
+          CrewManager.aimLimb(mesh, rig, 'LeftLeg', 0.02, -1, 0.12);
+          CrewManager.aimLimb(mesh, rig, 'RightForeArm', 0.08, -0.5, 0.65, 0.35);
+          CrewManager.aimLimb(mesh, rig, 'LeftForeArm', -0.08, -0.5, 0.65, -0.35);
+        }
+        if (!walking) {
+          const feet = ['LeftFoot', 'RightFoot'].map(name => rig.bone?.(name)).filter(Boolean);
+          const footPosition = mesh.userData.footPosition || (mesh.userData.footPosition = new THREE.Vector3());
+          let lowest = Infinity;
+          for (const foot of feet) {
+            foot.getWorldPosition(footPosition);
+            lowest = Math.min(lowest, mesh.worldToLocal(footPosition).y);
+          }
+          if (Number.isFinite(lowest)) mesh.position.y = 0.4 - lowest;
+        }
+      }
+      const head = rig.bone?.('Head');
+      if (head) {
+        if (interaction) head.rotation.x += Math.sin(t * 3.6) * 0.045;
+        if (resting) head.rotation.x += 0.1;
+        if (member.hallucinating) head.rotation.z += Math.sin(t * 5) * 0.1;
+      }
+    }    const parts = mesh.userData.parts;
+    if (parts) {
+      const swing = Math.sin(t * 8);
+      parts.legL.rotation.x = walking ? swing * 0.45 : resting ? -0.9 : 0;
+      parts.legR.rotation.x = walking ? -swing * 0.45 : resting ? -0.9 : 0;
+      parts.armL.rotation.set(walking ? -swing * 0.35 : 0, 0, 0.04);
+      parts.armR.rotation.set(walking ? swing * 0.35 : 0, 0, -0.04);
+      parts.forearmL.rotation.x = 0;
+      parts.forearmR.rotation.x = 0;
+      parts.head.rotation.set(resting ? 0.16 : 0, Math.sin(t * 0.7) * 0.07, 0);
+      parts.body.rotation.x = resting ? 0.09 : 0;
+      if (resting) mesh.position.y -= 0.18;
+      if (member.hostile) {
+        parts.armL.rotation.x = -1.1 + Math.sin(t * 10) * 0.2;
+        parts.armR.rotation.x = -1.1 - Math.sin(t * 10) * 0.2;
+        parts.head.rotation.y = Math.sin(t * 9) * 0.3;
+      } else if (interaction) {
+        parts.armR.rotation.x = -0.7 + Math.sin(t * 3.5) * 0.17;
+        parts.forearmR.rotation.x = -0.5;
+        parts.head.rotation.x = Math.sin(t * 3.5) * 0.08;
+        if (interaction === 'welcome') {
+          parts.armR.rotation.z = -2.3 + Math.sin(t * 7) * 0.15;
+        }
+      } else if (working) {
+        if (['fish', 'salvage', 'repair', 'cook', 'care'].includes(job)) {
+          parts.armR.rotation.x = -0.75 + Math.sin(t * (job === 'repair' ? 5 : 2.8)) * 0.25;
+          parts.armL.rotation.x = -0.6;
+          parts.forearmL.rotation.x = -0.4;
+          parts.forearmR.rotation.x = -0.5;
+        } else if (job === 'navigate' || job === 'water') {
+          parts.armR.rotation.x = -0.75;
+          parts.forearmR.rotation.x = -0.7;
+        } else if (job === 'guard') {
+          parts.armR.rotation.x = -2.3;
+          parts.forearmR.rotation.x = -0.5;
+          parts.head.rotation.y = Math.sin(t * 0.6) * 0.4;
+        }
+      }
+      if (member.hallucinating) parts.head.rotation.z = Math.sin(t * 6) * 0.15;
+    }
+    const props = mesh.userData.workProps;
+    if (props) {
+      const propJob = interaction === 'ration' ? 'cook'
+        : working ? (job === 'salvage' ? 'fish' : job) : '';
+      props.children.forEach(prop => { prop.visible = prop.name === propJob; });
+      props.visible = props.children.some(prop => prop.visible);
+      if (props.visible) {
+        const hand = rig?.bone?.('RightHand') || parts?.handR;
+        if (hand) {
+          hand.getWorldPosition(mesh.userData.handPosition);
+          props.position.copy(mesh.worldToLocal(mesh.userData.handPosition));
+        } else props.position.set(0.3, 0.66, 0.24);
+        props.rotation.x = job === 'repair' ? Math.sin(t * 5) * 0.3 : 0;
+      }
+    }
+  },
+  separateOnDeck: (member, crew, raft, dt) => {
+    if (!dt) return;
+    const position = member.mesh.position;
+    const neighbors = crew.filter(other => other !== member && other.mesh).map(other => other.mesh.position);
+    if (typeof Game !== 'undefined' && Game.raft === raft && Game.player) {
+      neighbors.push({ x: Game.player.x, z: Game.player.z });
+    }
+    let pushX = 0, pushZ = 0;
+    for (const other of neighbors) {
+      const dx = position.x - other.x, dz = position.z - other.z;
+      const distance = Math.hypot(dx, dz);
+      if (distance >= 0.53) continue;
+      const angle = member.mesh.userData.phase;
+      const pressure = (0.53 - distance) * Math.min(1, dt * 7);
+      pushX += (distance > 0.001 ? dx / distance : Math.cos(angle)) * pressure;
+      pushZ += (distance > 0.001 ? dz / distance : Math.sin(angle)) * pressure;
+    }
+    const x = position.x + pushX, z = position.z + pushZ;
+    const cell = raft.worldToGrid(x, z);
+    // El rechazo solo se aplica al empuje, nunca bloquea el cruce de tablas.
+    if (raft.has(cell.gx, cell.gy)) {
+      const cs = raft.cellSize;
+      position.x = x; position.z = z;
+      if (!raft.has(cell.gx - 1, cell.gy)) position.x = Math.max(position.x, cell.gx * cs + 0.32);
+      if (!raft.has(cell.gx + 1, cell.gy)) position.x = Math.min(position.x, (cell.gx + 1) * cs - 0.32);
+      if (!raft.has(cell.gx, cell.gy - 1)) position.z = Math.max(position.z, cell.gy * cs + 0.32);
+      if (!raft.has(cell.gx, cell.gy + 1)) position.z = Math.min(position.z, (cell.gy + 1) * cs - 0.32);
+      member.gx = cell.gx; member.gy = cell.gy;
     }
   },
 
   assignPosition: (survivor, raft) => {
-    // Buscar una celda ocupada de la balsa sin otro tripulante
-    for (const [k] of raft.grid.entries()) {
-      const [gx, gy] = k.split(',').map(Number);
-      const occupied = CrewManager.members.some(m => m.alive && m !== survivor && m.gx === gx && m.gy === gy);
-      const isPlayer = Game.player && Game.raft === raft &&
-        (() => { const pg = raft.worldToGrid(Game.player.x, Game.player.z); return pg.gx === gx && pg.gy === gy; })();
-      if (!occupied && !isPlayer) { survivor.gx = gx; survivor.gy = gy; return true; }
+    let best = null;
+    let bestScore = Infinity;
+    const player = typeof Game !== 'undefined' && Game.raft === raft && Game.player
+      ? raft.worldToGrid(Game.player.x, Game.player.z) : null;
+    for (const [key, cell] of raft.grid.entries()) {
+      const [gx, gy] = key.split(',').map(Number);
+      const occupied = CrewManager.members.filter(m => m.alive && m !== survivor && m.gx === gx && m.gy === gy).length;
+      const score = occupied * 10 + (player?.gx === gx && player?.gy === gy ? 5 : 0) +
+        (['floor', 'armor'].includes(cell.buildingKey) ? 0 : 2);
+      if (score < bestScore) { best = { gx, gy }; bestScore = score; }
     }
-    if (raft.grid.size === 0) {
-      survivor.gx = null;
-      survivor.gy = null;
-      return false;
-    }
-    const center = raft.getCenter();
-    const { gx, gy } = raft.worldToGrid(center.x, center.z);
-    survivor.gx = gx; survivor.gy = gy;
-    return true;
+    survivor.gx = best?.gx ?? null;
+    survivor.gy = best?.gy ?? null;
+    return !!best;
   },
-
   count: () => CrewManager.members.filter(m => m.alive).length,
 
   totalWeight: () => CrewManager.members.filter(m => m.alive).length * 1.0,
@@ -712,6 +1124,7 @@ const CrewManager = {
     if (!member?.alive || !getCrewJob(jobKey)) return false;
     member.job = jobKey;
     member.lastIncident = `Tarea asignada: ${getCrewJob(jobKey).name}.`;
+    if (member.mesh?.userData.routine) member.mesh.userData.routine.timer = 0;
     return true;
   },
 
@@ -1079,7 +1492,7 @@ const CrewManager = {
         didUsefulWork = true;
       } else if (member.job === 'repair') {
         const advancedOnly = member.skill.effect === 'durability';
-        const repaired = repairMostDamaged(4.5 * efficiency, advancedOnly);
+        const repaired = repairMostDamaged(4.5 * efficiency, advancedOnly) || (advancedOnly ? repairMostDamaged(4.5 * efficiency) : 0);
         if (repaired > 0) {
           messages.push(
             `${member.name} reparó ${repaired.toFixed(0)} de estructura.`
@@ -1093,7 +1506,13 @@ const CrewManager = {
         target.health = Util.clamp(before + 3 * efficiency, 0, 100);
         const healed = target.health - before;
         if (healed > 0) {
-          messages.push(`${member.name} atendió a la persona más herida (+${healed.toFixed(0)} salud).`);
+          messages.push(`${member.name} atendió a ${target === game.player ? 'ti' : target.name} (+${healed.toFixed(0)} salud).`);
+          if (target !== game.player && target !== member) {
+            target.trust = Util.clamp(finiteNumber(target.trust) + 2, 0, 100);
+            target.lastIncident = `${member.name} le ayudó a curar sus heridas.`;
+            CrewManager.signalInteraction(target, 'care', member);
+          }
+          CrewManager.signalInteraction(member, 'care', target);
           didUsefulWork = true;
         }
         for (const crewMember of CrewManager.members) {
@@ -1221,8 +1640,21 @@ const CrewManager = {
           messages.push(`${member.name} compartió ${amount} de agua.`);
         } else if (helpRoll < 0.68) {
           game.player.morale = Util.clamp(game.player.morale + 3, 0, 100);
-          member.lastIncident = 'Levantó el ánimo del grupo.';
-          messages.push(`${member.name} consiguió levantar el ánimo del grupo.`);
+          const companion = CrewManager.members.filter(other => other.alive && other !== member && !other.hostile)
+            .sort((a, b) => a.morale - b.morale)[0];
+          if (companion) {
+            companion.morale = Util.clamp(companion.morale + 3, 0, 100);
+            companion.stress = Math.max(0, companion.stress - 3);
+            companion.trust = Util.clamp(companion.trust + 1, 0, 100);
+            member.lastIncident = `Escuchó a ${companion.name} y le animó a seguir.`;
+            companion.lastIncident = `Encontró apoyo hablando con ${member.name}.`;
+            messages.push(`${member.name} escuchó a ${companion.name}: recuperaron el ánimo juntos.`);
+            CrewManager.signalInteraction(member, 'talk', companion);
+            CrewManager.signalInteraction(companion, 'talk', member);
+          } else {
+            member.lastIncident = 'Levantó el ánimo del grupo.';
+            messages.push(`${member.name} consiguió levantar el ánimo del grupo.`);
+          }
         } else {
           member.trust = Util.clamp(member.trust + 3, 0, 100);
           for (const crewMember of CrewManager.members) {
@@ -1297,7 +1729,7 @@ const CrewManager = {
     };
   },
 
-  renderList: (container, onJobChange = null) => {
+  renderList: (container, onJobChange = null, onInteraction = null) => {
     container.innerHTML = '';
     if (CrewManager.members.length === 0) {
       container.innerHTML = '<p style="color:var(--muted)">No hay otros supervivientes a bordo.</p>';
@@ -1329,6 +1761,12 @@ const CrewManager = {
           <span class="crew-condition ${condition.level}">${escapeSurvivorHtml(condition.label)}</span>
         </div>
         <div class="crew-role">${escapeSurvivorHtml(m.skill.name)} · ${escapeSurvivorHtml(m.trait.name)}</div>
+        <div class="crew-activity">${escapeSurvivorHtml(CrewManager.getActivity(m))}</div>
+        ${m.alive && typeof onInteraction === 'function' ? `<div class="crew-interactions">
+          <button type="button" data-crew-action="talk" ${typeof Game !== 'undefined' && m.lastTalkDay === Game.day ? 'disabled' : ''}>Hablar</button>
+          <button type="button" data-crew-action="ration" ${typeof Game !== 'undefined' && ((Game.resources?.food || 0) < 0.5 || (Game.resources?.water || 0) < 0.65 || (m.hunger >= 95 && m.thirst >= 95)) ? 'disabled' : ''}>Compartir ración<small>0,5 comida · 0,65 agua</small></button>
+          <button type="button" data-crew-action="rest" ${m.job === 'rest' ? 'disabled' : ''}>Dar descanso</button>
+        </div>` : ''}
         <div class="crew-skill-detail">${escapeSurvivorHtml(m.skill.desc)} · ${escapeSurvivorHtml(m.trait.desc)}</div>
         <label class="crew-job">
           <span>Tarea asignada</span>
@@ -1353,6 +1791,11 @@ const CrewManager = {
         </div>
       `;
       container.appendChild(div);
+      if (typeof onInteraction === 'function') {
+        for (const button of div.querySelectorAll?.('[data-crew-action]') || []) {
+          button.onclick = () => onInteraction(m, button.dataset.crewAction);
+        }
+      }
       const select = div.querySelector?.('select[data-crew-index]');
       if (select) {
         select.onchange = () => {

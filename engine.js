@@ -46,6 +46,7 @@ const WORLD_SCALE = 0.05; // 40 px = 2 unidades (1 celda)
 const Input = {
   keys: {},
   held: {},
+  pressed: new Set(),
   mouse: { x: 0, y: 0, down: false, clicked: false, rightClicked: false },
   virtualPulses: new Set(),
   touchPointer: null,
@@ -71,6 +72,7 @@ const Input = {
       }
       Input.held[e.code] = true;
       Input.keys[e.code] = true;
+      Input.pressed.add(e.code);
       if (e.code === 'Space' || e.code === 'KeyB' || e.code === 'KeyE') e.preventDefault();
     });
     window.addEventListener('keyup', e => {
@@ -81,6 +83,7 @@ const Input = {
       Input.keys = {};
       Input.held = {};
       Input.virtualPulses.clear();
+      Input.pressed.clear();
       Input.touchPointer = null;
       Input.mouse.down = false;
       Input.resetClick();
@@ -229,12 +232,15 @@ const Input = {
   },
   isDown: (code) => !!Input.held[code] || !!Input.keys[code],
   wasPressed: (code) => {
+    // Conserva un toque breve aunque keyup llegue antes del siguiente frame.
+    if (Input.pressed.delete(code)) { Input.keys[code] = 'pressed'; return true; }
     if (Input.keys[code] === 'pressed') return false;
     if (Input.keys[code]) { Input.keys[code] = 'pressed'; return true; }
     return false;
   },
   resetClick: () => { Input.mouse.clicked = false; Input.mouse.rightClicked = false; },
   clearFrame: () => {
+    Input.pressed.clear();
     for (const k in Input.keys) if (Input.keys[k] === 'pressed') Input.keys[k] = false;
     for (const code of Input.virtualPulses) Input.keys[code] = false;
     Input.virtualPulses.clear();
@@ -344,7 +350,9 @@ const Particles = {
     }
   },
   emit: (x, y, z, color, count = 8, speed = 2) => {
-    const col = new THREE.Color(color);
+    const col = typeof THREE !== 'undefined' && THREE.Color
+      ? new THREE.Color(color)
+      : { r: 0.8, g: 0.8, b: 0.8 };
     for (let i = 0; i < count; i++) {
       if (Particles.data.length >= Particles.MAX) Particles.data.shift();
       const a = Math.random() * Math.PI * 2;
@@ -359,23 +367,62 @@ const Particles = {
       });
     }
   },
+  emitSmoke: (x, y, z, windX = 0.8, windZ = 0, color = '#cfd8dc', count = 1) => {
+    const col = typeof THREE !== 'undefined' && THREE.Color
+      ? new THREE.Color(color)
+      : { r: 0.81, g: 0.85, b: 0.86 };
+    const wx = Number(windX) || 0;
+    const wz = Number(windZ) || 0;
+    for (let i = 0; i < count; i++) {
+      if (Particles.data.length >= Particles.MAX) Particles.data.shift();
+      Particles.data.push({
+        x: x + Util.rand(-0.06, 0.06),
+        y,
+        z: z + Util.rand(-0.06, 0.06),
+        vx: wx * 0.35 + Util.rand(-0.12, 0.12),
+        vy: Util.rand(0.55, 0.95),
+        vz: wz * 0.35 + Util.rand(-0.12, 0.12),
+        windX: wx * 1.35,
+        windZ: wz * 1.35,
+        isSmoke: true,
+        life: Util.rand(1.1, 1.75),
+        r: col.r, g: col.g, b: col.b
+      });
+    }
+  },
   update: (dt) => {
-    const pos = Particles.points.geometry.attributes.position.array;
-    const col = Particles.points.geometry.attributes.color.array;
-    for (let i = 0; i < Particles.MAX; i++) { pos[i * 3 + 1] = -999; }
+    const pos = Particles.points
+      ? Particles.points.geometry.attributes.position.array
+      : null;
+    const col = Particles.points
+      ? Particles.points.geometry.attributes.color.array
+      : null;
+    if (pos) {
+      for (let i = 0; i < Particles.MAX; i++) { pos[i * 3 + 1] = -999; }
+    }
     for (let i = Particles.data.length - 1; i >= 0; i--) {
       const p = Particles.data[i];
+      if (p.isSmoke) {
+        p.vx += ((p.windX || 0) - p.vx) * Math.min(1, 2.4 * dt);
+        p.vz += ((p.windZ || 0) - p.vz) * Math.min(1, 2.4 * dt);
+        p.vy = Math.max(0.25, p.vy - 0.18 * dt);
+      } else {
+        p.vy -= 4.5 * dt; // gravedad
+      }
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       p.z += p.vz * dt;
-      p.vy -= 4.5 * dt; // gravedad
       p.life -= dt;
       if (p.life <= 0) { Particles.data.splice(i, 1); continue; }
-      pos[i * 3] = p.x; pos[i * 3 + 1] = p.y; pos[i * 3 + 2] = p.z;
-      col[i * 3] = p.r; col[i * 3 + 1] = p.g; col[i * 3 + 2] = p.b;
+      if (pos && col) {
+        pos[i * 3] = p.x; pos[i * 3 + 1] = p.y; pos[i * 3 + 2] = p.z;
+        col[i * 3] = p.r; col[i * 3 + 1] = p.g; col[i * 3 + 2] = p.b;
+      }
     }
-    Particles.points.geometry.attributes.position.needsUpdate = true;
-    Particles.points.geometry.attributes.color.needsUpdate = true;
+    if (Particles.points) {
+      Particles.points.geometry.attributes.position.needsUpdate = true;
+      Particles.points.geometry.attributes.color.needsUpdate = true;
+    }
   }
 };
 

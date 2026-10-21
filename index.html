@@ -37,7 +37,8 @@
           <li><strong>Motor</strong>: usa E para transformar 1 plástico en 2 de combustible</li>
           <li><strong>Tiburones</strong>: aléjate más de una casilla del marcador o golpéalos con el gancho</li>
           <li><strong>Corales</strong>: desvía la balsa con el remo, timón o motor; encallar puede destruir módulos</li>
-          <li><strong>Tripulación</strong>: asigna tareas, vigila sus reservas, confianza y estrés</li>
+          <li><strong>Tripulación</strong>: acércate y pulsa E para hablar, compartir una ración o dar descanso; asigna tareas desde su panel</li>
+          <li><strong>Agua</strong>: usa E en un recolector o purificador para beber de las reservas</li>
           <li><strong>Crisis</strong>: ofrece una ración o pulsa E repetidamente para reducir a un tripulante hostil</li>
           <li><strong>B</strong>: abrir menú de construcción</li>
           <li><strong>Escape</strong>: cancelar colocación / cerrar menús</li>
@@ -50,7 +51,7 @@
         <button id="btn-new-game">Nueva partida</button>
         <button id="btn-continue" class="secondary">Continuar guardado</button>
       </div>
-      <p class="version">v1.9 · Construcción avanzada y sucesos en alta mar</p>
+      <p class="version">v2.0 · Un océano vivo, una tripulación a tu lado</p>
     </div>
   </div>
 
@@ -160,6 +161,11 @@
       <div class="status-row status-navigation"><span>Navegación</span><strong id="navigation-status">a la deriva</strong></div>
     </div>
 
+    <div id="interaction-prompt" class="hidden" aria-label="Acción disponible">
+      <div class="interaction-copy"><span id="interaction-label"></span><small id="interaction-detail"></small></div>
+      <button id="btn-context-action" type="button" aria-label="Realizar acción"><kbd id="interaction-key">E</kbd></button>
+    </div>
+
     <!-- Botones de acción -->
     <div id="action-bar">
       <button id="btn-build"><span aria-hidden="true">🔨</span><span>Construir</span><kbd>B</kbd></button>
@@ -217,7 +223,7 @@
           <div id="fishing-target" aria-hidden="true"><span>Zona</span></div>
           <div id="fishing-marker" aria-hidden="true"><span>🐟</span></div>
         </div>
-        <button id="btn-fishing-pull" type="button">Tirar ahora (Espacio)</button>
+        <button id="btn-fishing-pull" type="button">Tirar ahora (Espacio / Clic)</button>
       </div>
     </div>
 
@@ -281,6 +287,27 @@
       </div>
     </div>
 
+    <!-- Carta náutica interactiva -->
+    <div id="chart-panel" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="chart-title">
+      <div class="modal-content wide chart-modal-content">
+        <div class="modal-header">
+          <h3 id="chart-title">Carta náutica</h3>
+          <button class="close-btn" id="close-chart" aria-label="Cerrar carta náutica">✕</button>
+        </div>
+        <div id="chart-summary" class="chart-summary"></div>
+        <div class="chart-canvas-wrap">
+          <canvas id="chart-canvas" width="560" height="340" aria-label="Mapa de navegación oceánica"></canvas>
+          <p class="chart-hint">Haz clic sobre el mapa o usa los controles inferiores para orientar el timón.</p>
+        </div>
+        <div class="chart-controls">
+          <button id="btn-chart-port" type="button">↶ Virar a babor</button>
+          <button id="btn-chart-straight" type="button">↑ Mantener recto</button>
+          <button id="btn-chart-starboard" type="button">↷ Virar a estribor</button>
+          <button id="btn-chart-route" type="button">⛵ Fijar ruta a la isla</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Tooltip -->
     <div id="tooltip"></div>
 
@@ -315,6 +342,7 @@
   <script src="player.js"></script>
   <script src="hook.js"></script>
   <script src="game-simulation.js"></script>
+  <script src="game-actions.js"></script>
   <script src="game-ui.js"></script>
   <script src="game-renderer.js"></script>
   <script src="game.js"></script>

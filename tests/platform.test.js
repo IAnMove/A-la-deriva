@@ -357,3 +357,24 @@ test('HTML declara controles, Three local y fallback CDN con SRI', () => {
   assert.ok(html.includes(`integrity="${integrity}"`));
   assert.ok(three.length > 500000);
 });
+
+
+test('las pulsaciones rápidas no se pierden entre frames ni se repiten al mantener la tecla', () => {
+  const env = createSandbox(); env.sandbox.canvasFixture = env.canvas;
+  load(env.sandbox, 'engine.js'); run(env.sandbox, 'Input.init(canvasFixture)');
+  env.windowTarget.dispatchEvent({type:'keydown',code:'KeyE'});
+  env.windowTarget.dispatchEvent({type:'keyup',code:'KeyE'});
+  assert.equal(run(env.sandbox, 'Input.wasPressed("KeyE")'), true);
+  assert.equal(run(env.sandbox, 'Input.wasPressed("KeyE")'), false);
+  run(env.sandbox, 'Input.clearFrame()');
+  assert.equal(run(env.sandbox, 'Input.wasPressed("KeyE")'), false);
+  env.windowTarget.dispatchEvent({type:'keydown',code:'KeyE'});
+  assert.equal(run(env.sandbox, 'Input.wasPressed("KeyE")'), true);
+  run(env.sandbox, 'Input.clearFrame()');
+  env.windowTarget.dispatchEvent({type:'keydown',code:'KeyE',repeat:true});
+  assert.equal(run(env.sandbox, 'Input.wasPressed("KeyE")'), false);
+  env.windowTarget.dispatchEvent({type:'keyup',code:'KeyE'});
+  env.windowTarget.dispatchEvent({type:'keydown',code:'KeyE'});
+  env.windowTarget.dispatchEvent({type:'blur'});
+  assert.equal(run(env.sandbox, 'Input.wasPressed("KeyE")'), false);
+});

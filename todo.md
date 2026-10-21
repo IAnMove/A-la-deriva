@@ -1,253 +1,35 @@
-# A la Deriva — Versión 3D
+# Hoja de Ruta de Mejoras — A la Deriva 3D
 
-Plan y guía de implementación para la siguiente sesión.
+## En curso / Completadas en esta iteración
+- [x] **Mejora visual y de fluidez de las olas del mar + olas que suben a la balsa (`world.js`)**
+  - Ondas orgánicas con *domain-warping* (sin patrón de cuadrícula ni interferencia ortogonal) manteniendo `SEA_SEGMENTS = 128` y optimizando el bucle CPU (descarte por *bounding box* de la balsa y eliminación de trigonometría por vértice en el pase de color).
+  - Normales analíticas continuas a 60 FPS en el *fragment shader*, eliminando el facetado de la malla de 1,25 m y el halo cuadrado bajo la balsa.
+  - Dispersión subsuperficial (SSS) turquesa, encaje de espuma por fragmento y filamentos de corriente curvados con bordes desvanecidos.
+  - Lenguas de agua y espuma (`World.deckWash`) que trepan por la borda expuesta y bañan los tablones de la cubierta cuando arrecia el oleaje o hay tormenta.
+- [x] **3. Viento direccional visible en vela, humo y banderola (`game-simulation.js`, `raft.js`, `engine.js`, `game-renderer.js`, `world.js`, `game-ui.js`)**
+  - Campo de viento direccional acoplado al clima y a las células de tormenta de la carta náutica.
+  - Orientación e hinchado dinámico de la vela (`sail`) y banderolas (`mast` / catavientos) según el ángulo real del viento y el rumbo del timón.
+  - Columnas de humo con flotabilidad y deriva por viento en hoguera (`fire`), ahumadero (`smokehouse`), cocina (`kitchen`) y faro (`beacon`), además de lluvia inclinada por el viento.
+  - Efecto del ángulo viento-vela sobre la velocidad de navegación en la carta náutica e indicador de viento en el HUD.
+- [x] **Mejora de animaciones GLB del protagonista, tripulación y caña de pescar (`character-glb.js`, `player.js`, `survivor.js`)**
+  - Captura de `bindQuat` real del esqueleto y limpieza por fotograma (`resetUpperBody`) de columna, hombros, cuello, cabeza y muñecas para eliminar las poses retorcidas de los clips exportados.
+  - Corrección del signo lateral y pronación de antebrazos en reposo, marcha y tareas de tripulación.
+  - Rediseño de proporciones y punto de agarre de la caña (`makeRod`), ciclo completo de lance/espera/recogida/lucha a dos manos con flexión por tramos (`setRodFlex`) y alineación del remo entre ambas manos.
+- [x] **Mejora de controles y puesta en escena de la pesca (`hook.js`, `game.js`, `game-renderer.js`, `index.html`)**
+  - Soporte de clic izquierdo del ratón y botón dedicado (`#btn-fishing-pull` / `#fishing-panel`) además de `ESPACIO` para tirar durante el forcejeo de pesca.
+  - Pez 3D forcejeando bajo la boya con ondas concéntricas durante la picada y salto parabólico 3D fuera del agua con estela de gotas hacia el jugador al completar la captura (`HookVis.launchLeapingFish`).
+- [x] **1. Carta náutica visual e interactiva en la mesa de navegación (`chart`) (`game-simulation.js`, `game-ui.js`, `game-actions.js`, `game.js`, `index.html`, `style.css`)**
+  - Modal de carta en `<canvas>` 2D estilo papel náutico al interactuar con la mesa `chart`.
+  - Dibujo de la estela recorrida desde `(0, 0)`, regiones descubiertas/visitadas, vectores de corriente locales, rosa de los vientos con vector de viento y cono de incertidumbre hacia la isla (o posición fijada).
+  - Selección de rumbo objetivo desde la carta haciendo clic sobre el mapa o mediante los controles de babor, recto y estribor.
 
-## Objetivo
-
-Crear una versión 3D jugable de **A la Deriva** usando **Three.js** (por CDN), manteniendo la esencia del juego 2D original pero aprovechando el espacio y la estética 3D.
-
-## Tecnología
-
-- HTML5
-- CSS
-- JavaScript vanilla
-- **Three.js 0.149.0** incluido en `vendor/`, con CDN fijada y SRI como respaldo.
-- Sin backend ni build obligatorio; Playwright es opcional para las pruebas E2E.
-
-## Estructura de archivos
-
-```
-a-la-deriva-3d/
-├── index.html
-├── style.css
-├── main.js              # Punto de entrada: comprueba THREE y arranca el Game
-├── game.js              # Estado y controlador compatible
-├── game-simulation.js   # Reglas agregadas y orquestación de la simulación
-├── game-ui.js           # Presentación DOM y HUD
-├── game-renderer.js     # Presentación 3D, cámara y resaltados
-├── world.js             # Escena, mar con espuma, cielo, iluminación, clima, cámara
-├── raft.js              # Balsa 3D, construcción sobre cuadrícula, modelos de estructuras
-├── player.js            # Figura 3D del náufrago y animaciones (la lógica está en game.js)
-├── hook.js              # Visualización del gancho/cuerda (la lógica está en game.js)
-├── entities.js          # Objetos flotantes, peligros, bancos de peces
-├── survivor.js          # Sistema de supervivientes, tripulación y figuras humanoides
-├── engine.js            # Utilidades, input, bucle, log, textos flotantes y partículas 3D
-├── audio.js             # Sonido con Web Audio API
-└── save.js              # localStorage
-```
-
-`game.js` conserva el estado y actúa como controlador. Simulación, UI y
-renderizado tienen módulos propios con adaptadores compatibles.
-
-## Fases de implementación
-
-### Fase 1 — Esqueleto 3D
-
-1. `index.html` con canvas, UI y Three.js local con respaldo CDN.
-2. `main.js`:
-   - Crear `Scene`, `PerspectiveCamera`, `WebGLRenderer`.
-   - Añadir iluminación ambiental + direccional.
-   - Cámara cenital/ligeramente isométrica que siga a la balsa.
-3. `world.js`:
-   - Plano de mar ondulado con material azul translúcido.
-   - Cielo con gradiente o color según hora del día.
-   - Niebla opcional para dar profundidad.
-
-### Fase 2 — Balsa y construcción
-
-1. `raft.js`:
-   - Representar cada celda como un cubo/bloque de madera 3D.
-   - Sistema de grid 2D interno (igual que en 2D) pero colocando meshes en 3D.
-   - Módulos iniciales: suelo de madera, caja, red, recolector, vela, timón, radio, motor, etc.
-   - Construcción: seleccionar pieza en UI, preview fantasma, clic para colocar.
-   - Conexión con recursos y costes.
-
-### Fase 3 — Personaje y movimiento
-
-1. `player.js`:
-   - Modelo simple del náufrago (cápsula o figura geométrica).
-   - WASD para moverse sobre la balsa.
-   - Animación de balanceo con el mar.
-
-### Fase 4 — Gancho y recogida
-
-1. `hook.js`:
-   - Línea 3D desde el personaje al cursor del mundo.
-   - Clic para lanzar; colisión con objetos flotantes.
-   - Animación de recogida.
-
-### Fase 5 — Objetos flotantes y entorno
-
-1. `entities.js`:
-   - Spawner de objetos 3D: tablas, cajas, bidones, redes, frutas, supervivientes.
-   - Peligros: tiburón con aleta visible, bancos de peces.
-   - Corriente: objetos flotan y la balsa los alcanza.
-
-### Fase 6 — Supervivencia y día/noche
-
-1. Portar de `survivor.js` y `game.js` del 2D:
-   - Hambre, sed, salud, moral.
-   - Consumo diario.
-   - Rescate de supervivientes.
-   - Eventos y fin de día.
-
-### Fase 7 — Eventos y peligros 3D
-
-1. Tormenta: lluvia de partículas, oscurecimiento, relámpagos.
-2. Tiburón: aleta que rodea la balsa y golpea.
-3. Ola gigante: pared de agua que avanza.
-4. Calor, niebla, bancos de peces, barco a lo lejos.
-
-### Fase 8 — Victoria y derrota
-
-1. Condiciones de victoria: radio señal o llegada a isla.
-2. Condiciones de derrota: muerte, destrucción, motín.
-3. Pantallas de inicio/fin/pausa.
-
-### Fase 9 — Sonido y guardado
-
-1. Portar `audio.js` y `save.js` del 2D.
-2. Efectos 3D espaciales simples (opcional).
-
-### Fase 10 — Pulido
-
-1. Sombras suaves.
-2. Reflejos en el agua.
-3. Animaciones de construcción y daño.
-4. Optimización: LOD, frustum culling, pooling.
-
-## Controles (iguales que 2D)
-
-- **WASD / Flechas**: mover personaje.
-- **Ratón**: apuntar gancho.
-- **Clic izquierdo**: lanzar/recoger gancho.
-- **E**: interactuar / demoler selección.
-- **B**: menú de construcción.
-- **Espacio**: pausar.
-- **M**: silenciar sonido.
-- **Móvil**: mando táctil, toque para actuar y pulsación larga para seleccionar.
-
-## Decisiones de diseño 3D
-
-- **Estilo**: low-poly, colores planos, sombras suaves. Sin modelos externos; todo generado por código.
-- **Perspectiva**: cámara cenital inclinada (~45°) que sigue suavemente a la balsa.
-- **Mar**: plano con shader o geometría ondulada; reflejos falsos con mapa de entorno o specular.
-- **Balsa**: bloques modulares encajados, cada uno un mesh independiente para poder destruir/reparar.
-- **Personaje**: cápsula con detalles mínimos (cabeza esfera, cuerpo caja).
-- **Objetos**: formas geométricas simples con colores distintivos.
-
-## Criterios de éxito
-
-- [x] El juego se sirve localmente y dispone de Three.js sin conexión.
-- [ ] Ejecutar la suite E2E cuando haya una instancia de navegador conectada.
-- [x] Se puede mover al personaje y lanzar el gancho.
-- [x] Se pueden recoger objetos y construir la balsa (recogida solo con gancho; automática si el objeto toca la balsa).
-- [x] Ciclo día/noche visible (cielo, sol, estrellas, iluminación).
-- [x] Supervivencia: hambre/sed/salud/moral/stamina/cordura funcionan.
-- [x] Eventos y peligros (tormenta con lluvia y relámpagos, tiburón, ola, niebla, calor, etc.).
-- [x] Victoria y derrota (radio e isla; muerte, destrucción, motín).
-- [x] Guardado en localStorage.
-- [x] Sonido activable/desactivable.
-
-## Cambios respecto al plan original
-
-- Three.js **0.149.0 build UMD** local (no módulos ES), con respaldo CDN.
-- Mar con colores por vértice: gradiente profundidad→cresta, espuma modulada a alta frecuencia y mayor amplitud de olas en tormenta.
-- Personajes low-poly articulados (brazos/piernas con pivote, pelo, ojos) con animación de caminar, remar y lanzar el gancho.
-- Clic derecho selecciona una celda para desmontarla con E (en el 2D la selección no llegó a implementarse).
-- Corrección del 2D: los supervivientes rescatados se colocan sobre celdas ocupadas de la balsa (antes quedaban fuera).
-
-## Pendiente / ideas de pulido
-
-- Sombras y reflejos más elaborados en el agua.
-- Modelo de isla visible al acercarse la victoria por isla; barco de rescate al ganar por radio.
-- Animaciones de construcción y destrucción más vistosas.
-
-## Notas
-
-- Priorizar que todo funcione antes de pulir la estética.
-- Mantener la arquitectura modular para facilitar cambios.
-- Reutilizar la lógica de supervivencia, recursos y eventos del juego 2D siempre que sea posible.
-
-## Revisión jugable — 29/07/2026
-
-- Corregida la producción pasiva de comida y agua, que antes se redondeaba a cero por fotograma.
-- Corregida la recogida de recursos fraccionarios y el cobro doble de objetos enganchados.
-- Reequilibradas cocina, botiquín y radio para eliminar interacciones infinitas.
-- La destrucción de la última celda ahora causa una derrota real; demoler ya no puede separar la balsa.
-- Colisiones de restos y tiburones ajustadas a la forma real de la balsa.
-- Clima persistente en vez de efectos aleatorios de un solo fotograma.
-- Pausa con espacio reparada tanto al pausar como al reanudar.
-- Habilidades de pescador, cocinero, mecánico y conflictivo conectadas a la lógica.
-- Carga y almacenamiento afectan a la velocidad de deriva y al avance hacia la isla.
-- Rutas de aparición ajustadas para que restos, peces y tiburones lleguen a la zona jugable.
-- Guardados incompletos o antiguos se sanean al cargar sin romper la partida.
-- Autoguardado al iniciar y al cerrar cada día.
-- Los menús de construcción, tripulación y registro pausan la simulación.
-- Radio, motor, cocina, botiquín y estructuras reforzadas pueden repararse.
-- Rutas de radio e isla equilibradas y verificadas mediante simulación completa.
-- Costes, recogidas y cantidades fraccionarias se muestran con nombres en español.
-- Pruebas unitarias e integración: `npm run test:unit`.
-- Suite completa de navegador preparada: `npm run test:e2e`.
-
-## Revisión jugable — v1.5
-
-- Mar reducido a 4.225 vértices, superficie a 30 Hz y normales/color a 10 Hz.
-- Objetos flotantes y tiburones reutilizan plantillas GPU.
-- Hambre y sed funcionan como reservas; cocinar cuenta como ración del día.
-- Redes, cultivos y purificadores ya no cubren por sí solos a una persona.
-- Toda prestación estructural escala con la salud; a cero queda inoperativa.
-- Timón, remo, vela y motor participan en una navegación real con combustible.
-- Guardado v2 con migración, saneado y autoguardado al ocultar o cerrar.
-- Controles táctiles completos y Three.js local para jugar sin conexión.
-- Simulación, HUD y render 3D separados del controlador `Game`.
-
-## Revisión jugable — v1.6
-
-- Movimiento por clic con búsqueda de rutas sobre balsas cóncavas.
-- Movimiento manual relativo al giro de cámara y animación de remo corregida.
-- Vela y radio inician rutas, permiten cambiar entre ellas y conservan el progreso.
-- Impactos de tiburón aplicados al módulo alcanzado en vez de a uno aleatorio.
-- Objetivos de progresión ordenados y con distancia o señal visible.
-- Muerte por hambre o sed resuelta antes de aplicar curación pasiva.
-- Tripulación separada visualmente del jugador cuando comparte una celda.
-- Guardados futuros o demasiado grandes protegidos contra sobrescritura.
-- Carga defensiva de balsas y tripulación; estado transitorio reiniciado al continuar.
-- Salida al menú con guardado síncrono y clics pendientes limpiados al perder foco.
-- Reglas de estado, movimiento, remo, rutas y objetivos extraídas a `GameSimulation`.
-- Nuevas regresiones unitarias y casos E2E preparados para navegador.
-
-## Revisión jugable — v1.7
-
-- Interfaz visual renovada con paneles translúcidos, jerarquía tipográfica,
-  barras numéricas, navegación compacta y adaptación específica para móvil.
-- Mensajes de evento diferenciados por severidad y alerta central de amenazas.
-- Tiburones con acecho, objetivo visible y carga telegrafiada: el personaje
-  marcado puede alejarse más de una casilla o ahuyentarlos con el gancho.
-- Un tiburón que alcanza una casilla adyacente devora al personaje; si falla,
-  golpea de forma localizada la estructura de la balsa.
-- Arrecifes de coral visibles y señalizados que pueden esquivarse mediante
-  navegación lateral; una colisión daña gravemente o rompe el módulo alcanzado.
-- Eventos diarios de tiburón convertidos en encuentros jugables, sin daño
-  inevitable decidido al azar.
-- Pruebas de regresión para telegráficos, esquiva, ataque, defensa con gancho,
-  colisiones de coral y componentes de la nueva interfaz.
-
-## Revisión jugable — v1.8
-
-- Tareas configurables para cada tripulante: pesca, agua, recuperación,
-  reparación, cuidados, navegación, guardia, cocina y descanso.
-- Eficiencia laboral dependiente de salud, hambre, sed, confianza, estrés,
-  personalidad y afinidad entre tarea y especialidad.
-- Confianza, estrés, privación, incidentes y estados visibles de cada NPC.
-- Colaboraciones espontáneas, errores, discusiones, pequeños robos y daños
-  contextuales con enfriamientos para evitar cadenas arbitrarias.
-- Alucinaciones telegrafiadas tras varios días críticos sin comida o agua.
-- Crisis hostiles con confrontación propia: racionar, defenderse con energía,
-  recibir ayuda de la guardia, reducir al agresor, resultar herido o morir.
-- Posibilidad de expulsar a un tripulante reducido, con coste moral y social.
-- Reservas expresadas en días para anticipar la escasez y reducción moderada
-  del alimento y agua encontrados en restos comunes.
-- Nuevas variables persistentes y saneadas en guardados antiguos o corruptos.
-- Regresiones para tareas, contribuciones, estorbos, privación, hostilidad,
-  confrontaciones y muerte durante una crisis.
+## Próximas mejoras planificadas
+- [ ] **2. Pecios y boyas explorables como puntos fijos de región**
+  - Puntos de interés visibles en el horizonte dentro de regiones `debris` y `ship` (pecios semihundidos, boyas meteorológicas).
+  - Exploración por fases al echar el ancla cerca, con relación riesgo/recompensa (piezas únicas de radio, metal, combustible, pistas de navegación).
+- [ ] **4. Vida a bordo y reacciones contextuales de la tripulación**
+  - Vigía en la torre (`lookout`) señalando físicamente hacia el rumbo de arrecifes, tiburones o la isla.
+  - Sinergias de puesto en tiempo real (navegante en timón, mecánico en motor).
+  - Bocadillos breves de reacción en cubierta al entrar en biomas o avistar tierra sin interrumpir con modales.
+- [ ] **5. Audio procedural WebAudio ambiental y espacial**
+  - Romper de olas graves cerca de arrecifes o costa, crujido de madera con el ancla tensa en tormenta y estática/morse en la radio según cercanía a la ruta de barcos.

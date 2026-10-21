@@ -173,10 +173,10 @@ const BUILDINGS = {
 
 // ---- Constructores de modelos 3D (low-poly, primitivas) ----
 const MatLib = {};
-function mat(color, emissive = null) {
-  const key = color + '|' + emissive;
+function mat(color, emissive = null, vertexColors = false) {
+  const key = color + '|' + emissive + '|' + vertexColors;
   if (!MatLib[key]) {
-    const m = new THREE.MeshLambertMaterial({ color });
+    const m = new THREE.MeshLambertMaterial({ color, vertexColors });
     if (emissive) m.emissive = new THREE.Color(emissive);
     m.userData.sharedRaftMaterial = true;
     MatLib[key] = m;
@@ -214,178 +214,429 @@ function triSail(w, h, color, x = 0, y = 0, z = 0) {
   return m;
 }
 
-// Modelo 3D de cada estructura (sin el suelo base). Origen en el centro de la celda, y=0 = superficie del suelo.
+// Agrupa geometría estática por material para conservar el rendimiento incluso
+// con muchos tablones, amarres y construcciones.
+function batchRaftParts(parts) {
+  const group = new THREE.Group();
+  const buckets = new Map();
+  for (const part of parts) {
+    part.updateMatrix();
+    const geometry = part.geometry.index ? part.geometry.toNonIndexed() : part.geometry.clone();
+    geometry.applyMatrix4(part.matrix);
+    const colors = new Float32Array(geometry.getAttribute('position').count * 3);
+    const color = part.material.color;
+    for (let i = 0; i < colors.length; i += 3) {
+      colors[i] = color.r; colors[i + 1] = color.g; colors[i + 2] = color.b;
+    }
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    const batchMaterial = mat(0xffffff, null, true);
+    if (!buckets.has(batchMaterial)) buckets.set(batchMaterial, []);
+    buckets.get(batchMaterial).push(geometry);
+    part.geometry.dispose();
+  }
+  for (const [material, geometries] of buckets) {
+    const merged = new THREE.BufferGeometry();
+    for (const name of ['position', 'normal', 'uv', 'color']) {
+      const attributes = geometries.map(geometry => geometry.getAttribute(name));
+      if (attributes.some(attribute => !attribute)) continue;
+      const data = new Float32Array(attributes.reduce((length, attribute) => length + attribute.array.length, 0));
+      let offset = 0;
+      for (const attribute of attributes) {
+        data.set(attribute.array, offset);
+        offset += attribute.array.length;
+      }
+      merged.setAttribute(name, new THREE.BufferAttribute(data, attributes[0].itemSize));
+    }
+    const mesh = new THREE.Mesh(merged, material);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+    for (const geometry of geometries) geometry.dispose();
+  }
+  return group;
+}
+
+function raftBeam(from, to, radius = 0.025, color = 0xcfb889, segments = 6) {
+  const a = new THREE.Vector3(...from), b = new THREE.Vector3(...to);
+  const delta = b.clone().sub(a);
+  const mesh = cyl(radius, radius, delta.length(), color, 0, 0, 0, segments);
+  mesh.position.copy(a.add(b).multiplyScalar(0.5));
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), delta.normalize());
+  return mesh;
+}
+
+function raftRing(radius, thickness, color, x, y, z, horizontal = true) {
+  const mesh = new THREE.Mesh(new THREE.TorusGeometry(radius, thickness, 4, 12), mat(color));
+  mesh.position.set(x, y, z);
+  if (horizontal) mesh.rotation.x = Math.PI / 2;
+  return mesh;
+}
+
+function addCot(parts, y, z, color = 0x6e9eaa) {
+  parts.push(box(1.5, 0.12, 0.74, 0x775337, 0, y, z));
+  parts.push(box(1.39, 0.1, 0.65, 0xd7c9a6, 0, y + 0.11, z));
+  parts.push(box(0.91, 0.075, 0.67, color, 0.22, y + 0.19, z));
+  parts.push(box(0.29, 0.12, 0.49, 0xeee4c9, -0.5, y + 0.18, z));
+  for (const x of [-0.66, 0.66]) {
+    for (const dz of [-0.29, 0.29]) parts.push(box(0.07, y + 0.17, 0.07, 0x63472f, x, (y + 0.17) / 2, z + dz));
+  }
+  for (const x of [-0.12, 0.53]) parts.push(box(0.016, 0.008, 0.67, 0xc9d9ca, x, y + 0.233, z));
+}
+
+function curvedRaftSail(width, height, color) {
+  const geometry = new THREE.BufferGeometry();
+  const vertices = [], indices = [];
+  const columns = 5, rows = 8;
+  for (let y = 0; y <= rows; y++) {
+    const v = y / rows;
+    for (let x = 0; x <= columns; x++) {
+      const u = x / columns;
+      vertices.push(width * u * (1 - v * 0.9), height * v,
+        Math.sin(u * Math.PI) * Math.sin(v * Math.PI) * 0.25);
+    }
+  }
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < columns; x++) {
+      const i = y * (columns + 1) + x;
+      indices.push(i, i + 1, i + columns + 1, i + 1, i + columns + 2, i + columns + 1);
+    }
+  }
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  const cloth = new THREE.Mesh(geometry, new THREE.MeshLambertMaterial({ color, side: THREE.DoubleSide }));
+  cloth.castShadow = true;
+  return cloth;
+}
+
+// Modelos de salvamento: soportes, piezas recuperadas y detalles legibles
+// desde la cámara de juego. Origen y=0 en la superficie de la cubierta.
 function buildStructureMesh(key) {
-  const g = new THREE.Group();
+  const g = new THREE.Group(), parts = [];
+  const wood = 0x986940, dark = 0x5f4432, rope = 0xd1b582;
+  const metal = 0x526c70, brass = 0xc1a46d, canvas = 0xe5d9b7;
+  const B = (...args) => parts.push(box(...args));
+  const C = (...args) => parts.push(cyl(...args));
+  const beam = (...args) => parts.push(raftBeam(...args));
+  const ring = (...args) => parts.push(raftRing(...args));
+  const legs = (w, d, h) => {
+    for (const x of [-w / 2, w / 2]) for (const z of [-d / 2, d / 2])
+      B(0.09, h, 0.09, dark, x, h / 2, z);
+  };
+  const crate = (w, d, h, y = 0) => {
+    B(w - 0.1, 0.1, d - 0.1, dark, 0, y + 0.06, 0);
+    for (let i = 0; i < 3; i++) {
+      const cy = y + (i + 0.5) * h / 3;
+      for (const z of [-d / 2, d / 2]) B(w, h / 3 - 0.015, 0.075, i % 2 ? 0xa67b4e : wood, 0, cy, z);
+      for (const x of [-w / 2, w / 2]) B(0.075, h / 3 - 0.015, d, i % 2 ? wood : 0xa67b4e, x, cy, 0);
+    }
+    for (const x of [-w * 0.38, w * 0.38]) {
+      for (const z of [-d / 2 - 0.01, d / 2 + 0.01]) B(0.07, h + 0.05, 0.04, dark, x, y + h / 2, z);
+    }
+  };
+
   switch (key) {
     case 'storage':
-      g.add(box(1.1, 0.7, 1.1, 0xa1887f, 0, 0.35, 0));
-      g.add(box(1.2, 0.12, 1.2, 0x8d6e63, 0, 0.76, 0));
+      crate(1.1, 0.85, 0.65, 0.04);
+      for (let i = 0; i < 4; i++) B(1.18, 0.09, 0.22, i % 2 ? 0xb08755 : wood, 0, 0.73, (i - 1.5) * 0.235);
+      for (const x of [-0.38, 0.38]) B(0.075, 0.022, 0.94, metal, x, 0.787, 0);
+      B(0.15, 0.21, 0.06, brass, 0, 0.65, 0.49);
+      ring(0.07, 0.02, dark, 0, 0.63, 0.53, false);
       break;
     case 'bed':
-      g.add(box(1.5, 0.22, 1.0, 0xb0bec5, 0, 0.11, 0));
-      g.add(box(0.4, 0.16, 0.8, 0xeceff1, -0.5, 0.3, 0));
+      addCot(parts, 0.21, 0);
       break;
     case 'net': {
-      const geo = new THREE.PlaneGeometry(1.6, 1.6, 4, 4);
+      for (const z of [-0.73, 0.73]) beam([-0.8, 0.14, z], [0.8, 0.14, z], 0.055, wood);
+      for (const x of [-0.78, 0.78]) beam([x, 0.14, -0.74], [x, 0.14, 0.74], 0.045, dark);
+      const geo = new THREE.PlaneGeometry(1.48, 1.38, 8, 8);
       geo.rotateX(-Math.PI / 2);
-      const netMesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0xcfd8dc, wireframe: true }));
-      netMesh.position.y = 0.06;
-      g.add(netMesh);
-      g.add(cyl(0.05, 0.05, 1.6, 0x5d4037, 0, 0.05, -0.8));
-      g.add(cyl(0.05, 0.05, 1.6, 0x5d4037, 0, 0.05, 0.8));
+      const positions = geo.getAttribute('position');
+      for (let i = 0; i < positions.count; i++)
+        positions.setY(i, 0.13 - 0.07 * Math.sin((positions.getX(i) / 1.48 + 0.5) * Math.PI) * Math.sin((positions.getZ(i) / 1.38 + 0.5) * Math.PI));
+      geo.computeVertexNormals();
+      const net = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0xc3b88d, wireframe: true }));
+      net.name = 'fishing-net';
+      g.add(net);
+      for (const x of [-0.63, 0.63]) for (const z of [-0.62, 0.62]) C(0.075, 0.075, 0.12, 0xe0b777, x, 0.18, z, 6);
       break;
     }
-    case 'rain':
-      g.add(cyl(0.6, 0.35, 0.7, 0x4fc3f7, 0, 0.55, 0, 10));
-      g.add(cyl(0.05, 0.05, 0.4, 0x78909c, -0.3, 0.2, -0.3));
-      g.add(cyl(0.05, 0.05, 0.4, 0x78909c, 0.3, 0.2, 0.3));
+    case 'rain': {
+      C(0.34, 0.29, 0.47, 0x487d87, 0, 0.28, 0, 10);
+      ring(0.34, 0.03, metal, 0, 0.51, 0);
+      for (const x of [-0.54, 0.54]) for (const z of [-0.54, 0.54])
+        beam([x, 0.04, z], [x, 1.0, z], 0.035, dark);
+      const funnel = new THREE.Mesh(new THREE.CylinderGeometry(0.76, 0.09, 0.3, 4, 1, true),
+        new THREE.MeshLambertMaterial({ color: 0x83b8bd, side: THREE.DoubleSide }));
+      funnel.rotation.y = Math.PI / 4;
+      funnel.position.y = 0.87;
+      g.add(funnel);
+      for (const z of [-0.54, 0.54]) beam([-0.54, 1.02, z], [0.54, 1.02, z], 0.022, rope);
+      for (const x of [-0.54, 0.54]) beam([x, 1.02, -0.54], [x, 1.02, 0.54], 0.022, rope);
+      C(0.29, 0.29, 0.018, 0x75c5c8, 0, 0.47, 0, 10);
       break;
+    }
     case 'crop':
-      g.add(box(1.3, 0.25, 1.3, 0x4e342e, 0, 0.12, 0));
-      g.add(cone(0.16, 0.45, 0x66bb6a, -0.35, 0.45, -0.3));
-      g.add(cone(0.16, 0.55, 0x81c784, 0.3, 0.5, 0.25));
-      g.add(cone(0.14, 0.4, 0x4caf50, 0.1, 0.42, -0.35));
+      crate(1.3, 1.15, 0.26);
+      B(1.22, 0.06, 1.06, 0x483c2c, 0, 0.235, 0);
+      for (let i = 0; i < 5; i++) {
+        const x = ((i % 3) - 1) * 0.36, z = i < 3 ? -0.25 : 0.27;
+        C(0.016, 0.021, 0.27, 0x74994c, x, 0.4, z);
+        for (const sign of [-1, 1]) {
+          const leaf = cone(0.15, 0.32, i % 2 ? 0x8bb95a : 0x5d9757, x + sign * 0.08, 0.46, z);
+          leaf.scale.z = 0.36; leaf.rotation.z = sign * 0.9; parts.push(leaf);
+        }
+      }
       break;
     case 'fire': {
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.45, 0.13, 6, 10), mat(0x78909c));
-      ring.rotation.x = Math.PI / 2;
-      ring.position.y = 0.1;
-      g.add(ring);
-      const flame = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.7, 6), new THREE.MeshBasicMaterial({ color: 0xff7043 }));
-      flame.position.y = 0.5;
-      flame.name = 'flame';
+      B(1.04, 0.06, 1.04, metal, 0, 0.03, 0);
+      for (let i = 0; i < 8; i++) {
+        const angle = i * Math.PI / 4;
+        C(0.12, 0.15, 0.18, i % 2 ? 0x7d8580 : 0x64716f, Math.cos(angle) * 0.42, 0.14, Math.sin(angle) * 0.42, 5);
+      }
+      beam([-0.3, 0.17, -0.2], [0.3, 0.17, 0.2], 0.085, dark);
+      beam([0.28, 0.2, -0.24], [-0.28, 0.2, 0.24], 0.08, 0x67402d);
+      const flame = new THREE.Group(); flame.name = 'flame'; flame.position.y = 0.22;
+      flame.add(cone(0.24, 0.56, 0xf99443, 0, 0.25, 0));
+      flame.add(cone(0.12, 0.37, 0xffdd76, 0.025, 0.2, 0.025));
       g.add(flame);
       break;
     }
-    case 'sail':
-      g.add(cyl(0.07, 0.09, 2.2, 0x5d4037, 0, 1.1, 0));
-      g.add(triSail(1.1, 1.5, 0xe3f2fd, 0.05, 0.4, 0));
+    case 'sail': {
+      C(0.055, 0.085, 2.4, dark, -0.34, 1.2, 0);
+      B(0.37, 0.12, 0.35, wood, -0.34, 0.08, 0);
+      beam([-0.34, 0.39, 0], [0.9, 0.43, 0], 0.035, wood);
+      for (const z of [-0.63, 0.63]) beam([-0.34, 2.15, 0], [-0.63, 0.06, z], 0.013, rope);
+      for (const y of [0.2, 0.27, 0.34]) ring(0.087, 0.018, rope, -0.34, y, 0);
+      const clothGroup = new THREE.Group(); clothGroup.name = 'sail-cloth'; clothGroup.position.set(-0.29, 0.45, 0);
+      clothGroup.add(curvedRaftSail(1.14, 1.8, canvas));
+      clothGroup.add(raftBeam([0, 0, 0.01], [1.14, 0, 0.01], 0.014, rope));
+      clothGroup.add(raftBeam([1.14, 0, 0], [0.114, 1.8, 0], 0.014, rope));
+      const patch = box(0.2, 0.25, 0.014, 0xbfa783, 0.4, 0.48, 0.23);
+      patch.rotation.z = -0.15; clothGroup.add(patch); g.add(clothGroup);
+      const pennant = new THREE.Group(); pennant.name = 'wind-pennant'; pennant.position.set(-0.34, 2.36, 0);
+      pennant.add(curvedRaftSail(0.42, 0.16, 0xc57554)); g.add(pennant);
       break;
+    }
     case 'rudder': {
-      g.add(box(0.14, 0.9, 0.65, 0x3e2723, 0, 0.45, 0));
-      const handle = cyl(0.05, 0.05, 0.9, 0x5d4037, 0, 0.95, 0);
-      handle.rotation.z = Math.PI / 2;
-      g.add(handle);
+      B(0.8, 0.12, 0.62, wood, 0, 0.07, 0);
+      for (const x of [-0.3, 0.3]) B(0.09, 0.62, 0.1, dark, x, 0.35, 0.12);
+      C(0.07, 0.08, 1.07, dark, 0, 0.5, 0.14);
+      const tiller = new THREE.Group(); tiller.name = 'rudder-handle'; tiller.position.y = 0.83;
+      tiller.add(raftBeam([0, 0, 0.13], [0, 0.06, -0.64], 0.065, wood));
+      tiller.add(box(0.66, 0.095, 0.1, 0xbb925d, 0, 0.06, -0.6)); g.add(tiller);
+      B(0.15, 0.52, 0.57, wood, 0, 0.15, 0.39);
+      for (const y of [0.42, 0.69]) ring(0.095, 0.025, metal, 0, y, 0.14);
       break;
     }
-    case 'lookout':
-      g.add(cyl(0.09, 0.12, 2.4, 0x5d4037, 0, 1.2, 0));
-      g.add(box(1.25, 0.12, 1.25, 0x8d6e63, 0, 2.1, 0));
-      g.add(cyl(0.13, 0.16, 0.65, 0x263238, 0.18, 2.38, 0));
-      break;
-    case 'smokehouse': {
-      g.add(box(1.25, 1.0, 1.1, 0x6d4c41, 0, 0.5, 0));
-      const smokePipe = cyl(0.13, 0.16, 0.9, 0x455a64, 0.35, 1.35, 0);
-      g.add(smokePipe);
-      g.add(box(0.42, 0.55, 0.04, 0x3e2723, 0, 0.48, 0.57));
+    case 'lookout': {
+      for (const x of [-0.47, 0.47]) for (const z of [-0.43, 0.43]) {
+        beam([x, 0, z], [x * 0.78, 1.93, z * 0.78], 0.046, dark);
+      }
+      for (let i = 0; i < 5; i++) B(1.13, 0.07, 0.21, i % 2 ? wood : 0xae8656, 0, 1.88, (i - 2) * 0.225);
+      for (const z of [-0.5, 0.5]) {
+        B(1.15, 0.07, 0.06, dark, 0, 2.29, z);
+        for (const x of [-0.5, 0.5]) B(0.055, 0.39, 0.055, wood, x, 2.08, z);
+      }
+      for (let i = 0; i < 6; i++) beam([-0.26, 0.22 + i * 0.28, -0.51], [0.26, 0.22 + i * 0.28, -0.51], 0.025, wood);
+      beam([-0.26, 0.08, -0.51], [-0.26, 1.87, -0.51], 0.03, dark);
+      beam([0.26, 0.08, -0.51], [0.26, 1.87, -0.51], 0.03, dark);
+      beam([-0.07, 2.17, 0], [0.42, 2.35, 0], 0.09, brass);
       break;
     }
+    case 'smokehouse':
+      crate(1.12, 0.92, 1.05);
+      B(1.28, 0.1, 1.08, metal, 0, 1.08, 0);
+      C(0.1, 0.13, 0.63, metal, 0.3, 1.37, -0.2);
+      C(0.18, 0.18, 0.05, dark, 0.3, 1.71, -0.2);
+      B(0.47, 0.69, 0.065, dark, 0, 0.52, 0.5);
+      B(0.055, 0.19, 0.07, brass, 0.13, 0.53, 0.56);
+      for (let i = 0; i < 3; i++) B(0.34, 0.028, 0.02, 0x241f1c, 0, 0.75 + i * 0.075, 0.543);
+      break;
     case 'armor':
-      g.add(box(1.72, 0.72, 0.16, 0x607d8b, 0, 0.36, -0.78));
-      g.add(box(1.72, 0.72, 0.16, 0x607d8b, 0, 0.36, 0.78));
-      g.add(box(0.16, 0.72, 1.4, 0x455a64, -0.78, 0.36, 0));
-      g.add(box(0.16, 0.72, 1.4, 0x455a64, 0.78, 0.36, 0));
+      for (const z of [-0.79, 0.79]) {
+        B(1.75, 0.43, 0.12, metal, 0, 0.2, z);
+        for (const x of [-0.63, 0, 0.63]) {
+          B(0.13, 0.58, 0.1, wood, x, 0.3, z);
+          for (const y of [0.16, 0.4]) B(0.046, 0.046, 0.12, brass, x, y, z + Math.sign(z) * 0.04);
+        }
+      }
+      for (const x of [-0.8, 0.8]) B(0.12, 0.43, 1.46, 0x658083, x, 0.2, 0);
       break;
     case 'anchor': {
-      g.add(cyl(0.09, 0.09, 1.2, 0x37474f, 0, 0.35, 0));
-      const cross = box(1.0, 0.12, 0.12, 0x37474f, 0, 0.12, 0);
-      g.add(cross);
-      g.add(new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.07, 6, 10), mat(0x455a64)));
+      B(0.86, 0.13, 0.7, wood, 0, 0.08, 0);
+      for (const x of [-0.34, 0.34]) B(0.1, 0.67, 0.13, dark, x, 0.38, 0);
+      beam([-0.47, 0.62, 0], [0.47, 0.62, 0], 0.09, dark);
+      for (let i = 0; i < 6; i++) {
+        const winding = raftRing(0.16, 0.029, rope, (i - 2.5) * 0.058, 0.62, 0, false);
+        winding.rotation.y = Math.PI / 2; parts.push(winding);
+      }
+      beam([0.42, 0.62, 0], [0.42, 0.81, 0], 0.035, metal);
+      beam([0.42, 0.81, 0], [0.61, 0.81, 0], 0.035, wood);
+      const anchor = new THREE.Group(); anchor.name = 'anchor-head'; anchor.position.set(0, 0.03, 0.49);
+      anchor.add(raftBeam([0, 0.05, 0], [0, 0.63, 0], 0.045, metal));
+      anchor.add(raftBeam([-0.26, 0.2, 0], [0, 0.05, 0], 0.047, metal));
+      anchor.add(raftBeam([0.26, 0.2, 0], [0, 0.05, 0], 0.047, metal));
+      anchor.add(raftRing(0.07, 0.022, metal, 0, 0.69, 0, false)); g.add(anchor);
+      const cable = raftBeam([0, 0.57, 0.05], [0, 0.08, 0.57], 0.019, rope);
+      cable.name = 'anchor-rope'; g.add(cable);
       break;
     }
     case 'bunk':
-      g.add(box(1.55, 0.14, 0.72, 0x8d6e63, 0, 0.25, -0.38));
-      g.add(box(1.55, 0.14, 0.72, 0x8d6e63, 0, 0.95, 0.38));
-      g.add(box(1.42, 0.1, 0.62, 0x90caf9, 0, 0.36, -0.38));
-      g.add(box(1.42, 0.1, 0.62, 0x90caf9, 0, 1.06, 0.38));
+      addCot(parts, 0.19, 0, 0x769aa1);
+      addCot(parts, 0.98, 0, 0xa49277);
+      for (const x of [-0.71, 0.71]) B(0.06, 0.24, 0.8, dark, x, 1.24, 0);
       break;
     case 'purifier':
-      g.add(cyl(0.45, 0.5, 0.9, 0x90a4ae, 0, 0.45, 0, 10));
-      g.add(cyl(0.25, 0.25, 0.5, 0x4fc3f7, 0, 1.1, 0, 8));
-      g.add(box(0.7, 0.1, 0.7, 0x607d8b, 0, 0.02, 0));
+      legs(0.93, 0.65, 0.43);
+      B(1.08, 0.09, 0.78, wood, 0, 0.44, 0);
+      C(0.31, 0.34, 0.6, metal, -0.23, 0.78, 0, 10);
+      ring(0.31, 0.024, brass, -0.23, 1.08, 0);
+      C(0.32, 0.23, 0.08, 0x91a7a0, -0.23, 1.11, 0, 10);
+      beam([-0.23, 1.16, 0], [-0.23, 1.36, 0], 0.03, brass);
+      beam([-0.23, 1.36, 0], [0.37, 1.12, 0], 0.03, brass);
+      C(0.2, 0.18, 0.43, 0x88bec4, 0.35, 0.69, 0, 8);
+      C(0.19, 0.19, 0.025, 0x539baa, 0.35, 0.87, 0, 8);
       break;
     case 'kitchen':
-      g.add(box(1.2, 0.8, 0.9, 0x8d6e63, 0, 0.4, 0));
-      g.add(cyl(0.12, 0.12, 0.7, 0x546e7a, 0.35, 1.1, -0.2));
-      g.add(box(0.5, 0.1, 0.5, 0x263238, -0.25, 0.85, 0.1));
+      legs(0.94, 0.68, 0.72);
+      B(1.21, 0.12, 0.93, wood, 0, 0.76, 0);
+      B(1.02, 0.08, 0.71, dark, 0, 0.28, 0);
+      C(0.25, 0.21, 0.25, metal, -0.24, 0.95, 0.02, 10);
+      ring(0.25, 0.025, 0x899691, -0.24, 1.08, 0.02);
+      beam([-0.23, 0.96, 0.2], [-0.24, 0.97, 0.51], 0.035, dark);
+      B(0.4, 0.035, 0.53, 0xc29c66, 0.35, 0.845, 0);
+      B(0.04, 0.018, 0.25, 0xb2bdac, 0.35, 0.875, 0.06);
+      C(0.10, 0.10, 0.66, metal, -0.43, 1.13, -0.32);
       break;
     case 'medkit':
-      g.add(box(0.85, 0.55, 0.85, 0xeceff1, 0, 0.28, 0));
-      g.add(box(0.5, 0.1, 0.16, 0xe53935, 0, 0.58, 0));
-      g.add(box(0.16, 0.1, 0.5, 0xe53935, 0, 0.58, 0));
+      B(0.81, 0.48, 0.61, canvas, 0, 0.3, 0);
+      B(0.86, 0.08, 0.65, 0xc9c3aa, 0, 0.58, 0);
+      for (const x of [-0.28, 0.28]) B(0.06, 0.51, 0.635, metal, x, 0.31, 0);
+      B(0.38, 0.025, 0.11, 0xca6050, 0, 0.633, 0);
+      B(0.11, 0.025, 0.38, 0xca6050, 0, 0.633, 0);
       break;
-    case 'mast':
-      g.add(cyl(0.09, 0.12, 2.8, 0x5d4037, 0, 1.4, 0));
-      g.add(triSail(0.7, 0.5, 0x263238, 0.08, 2.3, 0));
+    case 'mast': {
+      C(0.06, 0.11, 2.85, dark, 0, 1.42, 0);
+      for (const x of [-0.62, 0.62]) for (const z of [-0.6, 0.6]) beam([0, 2.29, 0], [x, 0.04, z], 0.014, rope);
+      const flag = new THREE.Group(); flag.name = 'sail-cloth'; flag.position.set(0.07, 2.3, 0);
+      flag.userData.isPennant = true;
+      flag.add(curvedRaftSail(0.69, 0.43, 0xc57554)); g.add(flag);
+      for (let i = 0; i < 4; i++) ring(0.11, 0.016, rope, 0, 0.2 + i * 0.06, 0);
       break;
+    }
     case 'shelter': {
-      const tent = new THREE.Mesh(new THREE.ConeGeometry(1.0, 1.2, 4), mat(0xd7ccc8));
-      tent.rotation.y = Math.PI / 4;
-      tent.position.y = 0.6;
-      tent.castShadow = true;
-      g.add(tent);
-      g.add(box(0.4, 0.5, 0.05, 0x4e342e, 0, 0.25, 0.62));
+      for (const x of [-0.76, 0.76]) beam([x, 0.03, 0], [x, 1.39, 0], 0.04, dark);
+      beam([-0.84, 1.4, 0], [0.84, 1.4, 0], 0.044, wood);
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute([
+        -0.84, 0.1, -0.8, 0.84, 0.1, -0.8, -0.84, 1.39, 0,
+        0.84, 0.1, -0.8, 0.84, 1.39, 0, -0.84, 1.39, 0,
+        -0.84, 1.39, 0, 0.84, 1.39, 0, -0.84, 0.1, 0.8,
+        0.84, 1.39, 0, 0.84, 0.1, 0.8, -0.84, 0.1, 0.8
+      ], 3));
+      geometry.computeVertexNormals();
+      const tent = new THREE.Mesh(geometry, new THREE.MeshLambertMaterial({ color: canvas, side: THREE.DoubleSide }));
+      tent.castShadow = true; g.add(tent);
+      for (const x of [-0.82, 0.82]) for (const z of [-0.8, 0.8]) {
+        beam([x, 0.1, z], [x * 1.1, 0.02, z * 1.1], 0.016, rope);
+        B(0.06, 0.11, 0.06, dark, x * 1.1, 0.055, z * 1.1);
+      }
+      B(1.32, 0.045, 1.22, 0x7d948c, 0, 0.04, 0);
       break;
     }
     case 'radio':
-      g.add(box(0.9, 0.55, 0.6, 0x455a64, 0, 0.28, 0));
-      g.add(cyl(0.025, 0.025, 1.3, 0xcfd8dc, 0.3, 1.1, 0));
-      g.add(cone(0.09, 0.15, 0xe53935, 0.3, 1.8, 0));
-      g.add(cyl(0.12, 0.12, 0.06, 0x263238, -0.2, 0.3, 0.31));
+      legs(0.73, 0.45, 0.43);
+      B(1.0, 0.09, 0.68, wood, 0, 0.45, 0);
+      B(0.81, 0.48, 0.51, metal, 0, 0.75, 0);
+      B(0.28, 0.15, 0.024, 0xc0d7ab, 0.16, 0.85, 0.267);
+      for (let i = 0; i < 5; i++) B(0.024, 0.29, 0.026, dark, -0.28 + i * 0.044, 0.75, 0.268);
+      for (const x of [0.09, 0.27]) {
+        const dial = cyl(0.045, 0.045, 0.035, brass, x, 0.65, 0.28); dial.rotation.x = Math.PI / 2; parts.push(dial);
+      }
+      beam([0.3, 0.98, -0.12], [0.43, 1.94, -0.12], 0.014, 0xc1d0c6);
+      B(0.42, 0.035, 0.045, dark, 0, 1.05, 0);
       break;
     case 'motor': {
-      g.add(box(0.95, 0.6, 0.7, 0x607d8b, 0, 0.35, 0));
-      const prop = box(0.08, 0.7, 0.12, 0x263238, 0.55, 0.15, 0);
-      prop.name = 'prop';
-      g.add(prop);
-      const shaft = cyl(0.06, 0.06, 0.5, 0x37474f, 0.35, 0.2, 0);
-      shaft.rotation.z = Math.PI / 2;
-      g.add(shaft);
+      B(1.13, 0.13, 0.86, dark, 0, 0.12, 0);
+      B(0.7, 0.57, 0.64, 0x718a83, -0.13, 0.47, 0);
+      for (let i = 0; i < 5; i++) B(0.045, 0.36, 0.035, metal, -0.36 + i * 0.11, 0.47, 0.34);
+      C(0.07, 0.07, 0.56, metal, -0.34, 0.83, -0.19);
+      C(0.08, 0.08, 0.045, brass, 0.1, 0.78, 0.1);
+      beam([0.12, 0.35, 0], [0.65, 0.17, 0], 0.055, metal);
+      const prop = new THREE.Group(); prop.name = 'prop'; prop.position.set(0.65, 0.17, 0);
+      prop.add(box(0.08, 0.68, 0.115, brass)); prop.add(box(0.08, 0.115, 0.68, brass)); g.add(prop);
       break;
     }
-    case 'harpoon': {
-      g.add(cyl(0.18, 0.24, 0.7, 0x546e7a, 0, 0.35, 0));
-      const launcher = cyl(0.09, 0.09, 1.45, 0x37474f, 0, 0.82, 0);
-      launcher.rotation.x = Math.PI / 2;
-      g.add(launcher);
-      const tip = cone(0.16, 0.42, 0xcfd8dc, 0, 0.82, -0.9);
-      tip.rotation.x = Math.PI / 2;
-      g.add(tip);
+    case 'harpoon':
+      B(0.95, 0.12, 0.87, wood, 0, 0.06, 0);
+      C(0.14, 0.24, 0.6, metal, 0, 0.37, 0);
+      beam([0, 0.72, 0.53], [0, 0.82, -0.72], 0.065, dark);
+      beam([-0.48, 0.81, -0.33], [0.48, 0.81, -0.33], 0.035, wood);
+      beam([-0.48, 0.81, -0.33], [0, 0.78, 0.23], 0.013, rope);
+      beam([0.48, 0.81, -0.33], [0, 0.78, 0.23], 0.013, rope);
+      beam([0, 0.83, 0.36], [0, 0.92, -0.82], 0.021, metal);
+      { const tip = cone(0.085, 0.26, 0xc5d1bd, 0, 0.93, -0.91); tip.rotation.x = -Math.PI / 2; parts.push(tip); }
+      ring(0.2, 0.04, rope, 0.33, 0.13, 0.12);
       break;
-    }
     case 'infirmary':
-      g.add(box(1.5, 0.28, 0.8, 0xeceff1, 0, 0.22, 0));
-      g.add(box(0.35, 0.16, 0.68, 0x90caf9, -0.48, 0.45, 0));
-      g.add(box(0.52, 0.12, 0.16, 0xe53935, 0.42, 0.44, 0));
-      g.add(box(0.16, 0.12, 0.52, 0xe53935, 0.42, 0.44, 0));
+      addCot(parts, 0.27, 0, 0xdddcc4);
+      B(0.37, 0.02, 0.1, 0xc7685a, 0.3, 0.504, 0);
+      B(0.1, 0.02, 0.37, 0xc7685a, 0.3, 0.504, 0);
+      C(0.02, 0.02, 1.21, metal, -0.65, 0.63, -0.48);
+      B(0.14, 0.22, 0.07, 0x9bc8c0, -0.65, 1.1, -0.48);
+      beam([-0.65, 0.99, -0.48], [-0.38, 0.51, -0.16], 0.009, canvas);
       break;
     case 'chart':
-      g.add(box(1.45, 0.16, 1.1, 0x8d6e63, 0, 0.72, 0));
-      g.add(box(1.2, 0.03, 0.85, 0xfff3c4, 0, 0.82, 0));
-      for (const x of [-0.55, 0.55]) {
-        for (const z of [-0.38, 0.38]) g.add(cyl(0.05, 0.06, 0.7, 0x5d4037, x, 0.35, z));
+      legs(1.09, 0.75, 0.7);
+      for (let i = 0; i < 4; i++) B(1.45, 0.1, 0.27, i % 2 ? wood : 0xae8455, 0, 0.73, (i - 1.5) * 0.28);
+      B(1.16, 0.024, 0.84, canvas, 0, 0.8, 0);
+      for (const x of [-0.56, 0.56]) beam([x, 0.83, -0.42], [x, 0.83, 0.42], 0.033, 0xcabb94);
+      for (let i = 0; i < 4; i++) {
+        const route = box(0.14, 0.007, 0.015, 0x9b7660, -0.27 + i * 0.18, 0.818, Math.sin(i * 1.5) * 0.12);
+        route.rotation.y = Math.cos(i * 1.5) * 0.4; parts.push(route);
       }
+      ring(0.1, 0.018, brass, 0.39, 0.848, 0.24);
+      B(0.014, 0.014, 0.15, 0xc26852, 0.39, 0.85, 0.24);
       break;
-    case 'beacon':
-      g.add(cyl(0.28, 0.4, 1.15, 0x455a64, 0, 0.58, 0));
-      g.add(cyl(0.32, 0.32, 0.42, 0xffca28, 0, 1.35, 0, 10));
-      g.add(cone(0.38, 0.22, 0xe53935, 0, 1.68, 0, 10));
+    case 'beacon': {
+      C(0.15, 0.28, 1.17, metal, 0, 0.62, 0, 8);
+      C(0.35, 0.35, 0.065, dark, 0, 1.21, 0);
+      C(0.27, 0.27, 0.4, 0xc7ae72, 0, 1.44, 0, 8);
+      for (let i = 0; i < 4; i++) {
+        const angle = Math.PI / 4 + i * Math.PI / 2;
+        C(0.018, 0.018, 0.47, metal, Math.cos(angle) * 0.28, 1.45, Math.sin(angle) * 0.28, 5);
+      }
+      parts.push(cone(0.37, 0.24, 0xb75f4d, 0, 1.78, 0, 8));
+      const light = cyl(0.285, 0.285, 0.28, 0xffd576, 0, 1.44, 0, 8);
+      light.material = new THREE.MeshBasicMaterial({ color: 0xffda85 });
+      light.name = 'beacon-light'; light.visible = false; g.add(light);
       break;
+    }
     case 'containment':
-      for (const x of [-0.72, -0.24, 0.24, 0.72]) {
-        g.add(cyl(0.035, 0.035, 1.25, 0x78909c, x, 0.63, -0.62));
-        g.add(cyl(0.035, 0.035, 1.25, 0x78909c, x, 0.63, 0.62));
+      for (const x of [-0.69, 0.69]) for (const z of [-0.62, 0.62]) B(0.095, 1.33, 0.095, dark, x, 0.67, z);
+      for (let i = 0; i < 5; i++) {
+        const x = -0.6 + i * 0.3;
+        for (const z of [-0.62, 0.62]) C(0.022, 0.022, 1.2, metal, x, 0.66, z, 5);
       }
-      g.add(box(1.55, 0.08, 1.35, 0x546e7a, 0, 1.25, 0));
+      for (const x of [-0.69, 0.69]) for (const z of [-0.3, 0, 0.3]) C(0.022, 0.022, 1.2, metal, x, 0.66, z, 5);
+      for (const y of [0.12, 1.28]) {
+        for (const z of [-0.62, 0.62]) B(1.45, 0.08, 0.08, metal, 0, y, z);
+        for (const x of [-0.69, 0.69]) B(0.08, 0.08, 1.3, metal, x, y, 0);
+      }
+      B(0.11, 0.14, 0.075, brass, 0.28, 0.63, 0.68);
       break;
   }
+  if (parts.length) g.add(batchRaftParts(parts));
   return g;
 }
 
 class Raft {
   constructor() {
     this.cellSize = 2; // unidades de mundo por celda
+    this.deckHeight = 0.35;
+    this.draft = 0.15;
+    this.visualRevision = 0;
     this.grid = new Map(); // "gx,gy" => { buildingKey, health, mesh }
     this.damage = 0;
     this.lastDetached = 0;
@@ -403,6 +654,7 @@ class Raft {
       for (const cell of this.grid.values()) this.disposeMesh(cell);
     }
     this.grid.clear();
+    this.visualRevision++;
     this.damage = 0;
     this.lastDetached = 0;
     this.selected = null;
@@ -436,33 +688,197 @@ class Raft {
     const cell = { buildingKey, health: maxHealth, maxHealth, mesh: null };
     this.grid.set(this.key(gx, gy), cell);
     this.buildCellMesh(gx, gy, cell);
+    this.visualRevision++;
     return true;
   }
 
   buildCellMesh(gx, gy, cell) {
     if (!this.group) return;
+    if (cell.mesh) this.disposeMesh(cell);
     const cs = this.cellSize;
     const cg = new THREE.Group();
+    cg.name = 'raft-cell';
     cg.position.set((gx + 0.5) * cs, 0, (gy + 0.5) * cs);
+    cg.userData.gridX = gx;
+    cg.userData.gridY = gy;
+    const seed = Math.abs((gx * 73856093) ^ (gy * 19349663));
+    const palette = [0xb58a53, 0xa67947, 0xc3975e];
+    const planks = [];
+    for (let i = 0; i < 6; i++) {
+      const plank = box(cs - 0.085, 0.14, (cs - 0.11) / 6 - 0.016,
+        palette[(i + seed) % palette.length], 0, this.deckHeight - 0.07,
+        (i - 2.5) * ((cs - 0.11) / 6));
+      plank.rotation.y = (((seed + i * 7) % 5) - 2) * 0.002;
+      planks.push(plank);
+    }
+    const deck = batchRaftParts(planks);
+    deck.name = 'deck';
+    deck.children[0].name = 'base';
+    for (const surface of deck.children) surface.userData.intactColor = surface.material.color.getHex();
+    cg.userData.damageSurfaces = deck.children.slice();
+    cg.add(deck);
 
-    // Bloque base de madera (tablones)
-    const base = box(cs - 0.08, 0.4, cs - 0.08, 0x8d6e63, 0, 0.15, 0);
-    base.receiveShadow = true;
-    base.name = 'base';
-    cg.add(base);
-    // Listones oscuros entre tablones
-    cg.add(box(cs - 0.08, 0.42, 0.06, 0x5d4037, 0, 0.15, 0));
+    const foundation = [], details = [];
+    for (const x of [-0.62, 0.62]) foundation.push(box(0.12, 0.14, cs - 0.05, 0x654a32, x, 0.15, 0));
+    for (const z of [-0.62, 0.62]) {
+      const log = cyl(0.165, 0.18, cs - 0.025, 0x80633f, 0, 0.025, z, 7);
+      log.rotation.z = Math.PI / 2; foundation.push(log);
+      for (const sign of [-1, 1]) {
+        const end = cyl(0.132, 0.132, 0.016, 0xae8753, sign * (cs / 2 - 0.014), 0.025, z, 7);
+        end.rotation.z = Math.PI / 2; foundation.push(end);
+      }
+      for (const x of [-0.65, 0.65]) {
+        const lashing = raftRing(0.185, 0.025, 0xceaf79, x, 0.045, z, false);
+        lashing.rotation.y = Math.PI / 2; details.push(lashing);
+      }
+    }
+    for (const x of [-0.65, 0.65]) {
+      details.push(box(0.029, 0.017, cs - 0.085, 0xceaf79, x, this.deckHeight + 0.011, 0));
+      for (let i = 0; i < 6; i++) details.push(cyl(0.017, 0.017, 0.007, 0x665d48,
+        x + 0.095, this.deckHeight + 0.004, (i - 2.5) * ((cs - 0.11) / 6), 5));
+    }
+    const undercarriage = batchRaftParts(foundation);
+    undercarriage.name = 'flotation';
+    cg.add(undercarriage, batchRaftParts(details));
 
-    // Estructura encima
-    if (cell.buildingKey !== 'floor') {
-      const s = buildStructureMesh(cell.buildingKey);
-      s.position.y = 0.35;
-      s.name = 'structure';
-      cg.add(s);
+    // Los refuerzos de borde desaparecen al unir dos módulos: no atraviesan
+    // pasillos ni forman una cuadrícula de barandillas sobre la cubierta.
+    cg.userData.edges = [];
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const edgeParts = [];
+      const horizontal = dx === 0;
+      edgeParts.push(box(horizontal ? cs - 0.02 : 0.08, 0.13,
+        horizontal ? 0.08 : cs - 0.02, 0x775337, dx * 0.962, 0.175, dy * 0.962));
+      const from = horizontal ? [-0.94, 0.264, dy * 0.97] : [dx * 0.97, 0.264, -0.94];
+      const to = horizontal ? [0.94, 0.264, dy * 0.97] : [dx * 0.97, 0.264, 0.94];
+      edgeParts.push(raftBeam(from, to, 0.022, 0xc9aa72));
+      const edge = batchRaftParts(edgeParts);
+      edge.name = 'edge-' + dx + '-' + dy;
+      edge.visible = !this.has(gx + dx, gy + dy);
+      cg.userData.edges.push({ dx, dy, mesh: edge });
+      cg.add(edge);
     }
 
+    const damageParts = [];
+    for (let i = 0; i < 5; i++) {
+      const crack = box(0.21 + (i % 3) * 0.12, 0.008, 0.018, 0x4a3528,
+        ((seed + i * 3) % 7 - 3) * 0.15, this.deckHeight + 0.006, (i - 2) * 0.315);
+      crack.rotation.y = (i % 2 ? 1 : -1) * 0.21; damageParts.push(crack);
+    }
+    const damageDetails = batchRaftParts(damageParts);
+    damageDetails.name = 'damage-cracks';
+    damageDetails.visible = false;
+    cg.add(damageDetails);
+    cg.userData.damageDetails = damageDetails;
+    cg.userData.deck = deck;
+
+    if (cell.buildingKey !== 'floor') {
+      const structure = buildStructureMesh(cell.buildingKey);
+      structure.position.y = this.deckHeight;
+      structure.name = 'structure';
+      cg.add(structure);
+      cg.userData.structure = structure;
+      cg.userData.animations = {
+        flame: structure.getObjectByName('flame'),
+        sail: structure.getObjectByName('sail-cloth'),
+        pennant: structure.getObjectByName('wind-pennant'),
+        prop: structure.getObjectByName('prop'),
+        anchor: structure.getObjectByName('anchor-head'),
+        cable: structure.getObjectByName('anchor-rope'),
+        light: structure.getObjectByName('beacon-light'),
+        rudder: structure.getObjectByName('rudder-handle')
+      };
+    }
     cell.mesh = cg;
     this.group.add(cg);
+    this.tintDamaged(cell);
+    this.refreshEdgesAround(gx, gy);
+  }
+
+  refreshEdgesAround(gx, gy) {
+    for (const [dx, dy] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const x = gx + dx, y = gy + dy;
+      const cell = this.get(x, y);
+      if (!cell?.mesh) continue;
+      for (const edge of cell.mesh.userData.edges || []) {
+        edge.mesh.visible = !this.has(x + edge.dx, y + edge.dy);
+      }
+    }
+  }
+
+  refreshAllEdges() {
+    for (const [key, cell] of this.grid) {
+      if (!cell.mesh) continue;
+      const [gx, gy] = key.split(',').map(Number);
+      for (const edge of cell.mesh.userData.edges || []) {
+        edge.mesh.visible = !this.has(gx + edge.dx, gy + edge.dy);
+      }
+    }
+    if (this.selected && !this.has(this.selected.gx, this.selected.gy)) this.selected = null;
+  }
+
+  // Tiempo en segundos; sólo mueve piezas de los modelos, nunca la raíz.
+  // La flotación del conjunto y las coordenadas físicas las controla World.
+  updateVisuals(time = 0, dt = 0, options = {}) {
+    const wind = Util.clamp(Number(options.wind) || 0.5, 0, 2);
+    const hasWindVec = Number.isFinite(options.windX) || Number.isFinite(options.windZ);
+    const windAngle = Number.isFinite(options.windAngle)
+      ? Number(options.windAngle)
+      : hasWindVec
+        ? Math.atan2(Number(options.windZ) || 0, Number(options.windX) || 1)
+        : 0;
+    const heading = Util.clamp(Number(options.heading) || 0, -1, 1);
+    const delta = Util.clamp(Number(dt) || 0, 0, 0.1);
+    for (const cell of this.grid.values()) {
+      const animation = cell.mesh?.userData.animations;
+      if (!animation) continue;
+      const efficiency = this.cellEfficiency(cell);
+      if (animation.flame) {
+        animation.flame.scale.set(0.92 + Math.sin(time * 9) * 0.08,
+          0.87 + Math.sin(time * 12.7) * 0.15, 0.94 + Math.cos(time * 10.1) * 0.06);
+        animation.flame.rotation.y = time * 0.4;
+        animation.flame.rotation.z = -Math.cos(windAngle) * 0.16 * wind;
+        animation.flame.rotation.x = Math.sin(windAngle) * 0.16 * wind;
+      }
+      if (animation.sail) {
+        if (animation.sail.userData?.isPennant || cell.buildingKey === 'mast') {
+          animation.sail.rotation.y =
+            -windAngle + Math.sin(time * (4.2 + wind * 1.8)) * 0.11 * wind;
+          animation.sail.scale.z =
+            0.74 + (0.18 + Math.sin(time * 5.1) * 0.14) * wind;
+        } else {
+          const trimAngle = Util.clamp(
+            -windAngle * 0.58 + heading * 0.24,
+            -0.68,
+            0.68
+          );
+          animation.sail.rotation.y =
+            trimAngle + Math.sin(time * 1.7) * 0.045 * wind;
+          const rel = Math.abs(windAngle - heading * 0.48);
+          const fill = Util.clamp(0.75 + Math.cos(rel) * 0.25, 0.45, 1.1);
+          animation.sail.scale.z =
+            0.74 + (0.22 * fill + Math.sin(time * 2.3) * 0.12) * wind;
+        }
+      }
+      if (animation.pennant) {
+        animation.pennant.rotation.y =
+          -windAngle + Math.sin(time * (5.2 + wind * 2.1)) * 0.14 * wind;
+        animation.pennant.scale.z =
+          0.7 + (0.2 + Math.cos(time * 6.1) * 0.15) * wind;
+      }
+      if (animation.prop) animation.prop.rotation.x += delta * (options.motorActive ? 19 : 1.4) * efficiency;
+      if (animation.rudder) animation.rudder.rotation.y +=
+        ((heading * 0.5) - animation.rudder.rotation.y) * Math.min(1, delta * 4);
+      if (animation.anchor) {
+        const targetY = options.anchorDeployed ? -0.85 : 0.03;
+        animation.anchor.position.y += (targetY - animation.anchor.position.y) * Math.min(1, delta * 4);
+        animation.cable.scale.y = 1 + Math.max(0, 0.03 - animation.anchor.position.y) * 1.9;
+      }
+      if (animation.light) {
+        animation.light.visible = !!options.beaconLit && efficiency > 0;
+        animation.light.scale.setScalar(0.98 + Math.sin(time * 3) * 0.02);
+      }
+    }
   }
 
   removeAt(gx, gy) {
@@ -472,6 +888,9 @@ class Raft {
     if (!this.isConnectedWithout(k)) return false;
     this.disposeMesh(this.grid.get(k));
     this.grid.delete(k);
+    this.visualRevision++;
+    this.refreshEdgesAround(gx, gy);
+    if (this.selected?.gx === gx && this.selected?.gy === gy) this.selected = null;
     return true;
   }
 
@@ -567,6 +986,10 @@ class Raft {
       this.disposeMesh(cell);
       this.grid.delete(k);
       removed++;
+    }
+    if (removed > 0) {
+      this.visualRevision++;
+      this.refreshAllEdges();
     }
     return removed;
   }
@@ -668,6 +1091,7 @@ class Raft {
   totalShelter() { return this.countProvides('shelter'); }
 
   takeDamage(amount, impactX = null, impactZ = null, damageType = 'generic') {
+    if (!Number.isFinite(amount) || amount <= 0) return 0;
     const shelter = this.totalShelter();
     if (shelter > 0) amount *= Math.max(0.3, 1 - shelter * 0.25);
     const armor = this.countProvides('armor');
@@ -709,32 +1133,34 @@ class Raft {
     if (target[1].health <= 0) {
       this.disposeMesh(target[1]);
       this.grid.delete(target[0]);
+      this.visualRevision++;
+      this.refreshAllEdges();
       this.lastDetached = this.removeDetachedCells();
     }
     this.damage = amount;
     return amount;
   }
 
-  // Oscurece el bloque según el daño sufrido
+  // Tres estados de material compartido: sin asignaciones GPU por fotograma.
+  // Las grietas y la ligera torsión se revierten al reparar la celda.
   tintDamaged(cell) {
     if (!cell.mesh) return;
-    const b = BUILDINGS[cell.buildingKey];
-    const pct = cell.health / (cell.maxHealth || b.health);
-    const base = cell.mesh.getObjectByName('base');
-    if (base) {
-      if (pct < 0.7) {
-        const f = pct < 0.3 ? 0.45 : 0.7;
-        const damagedColor = new THREE.Color(0x8d6e63)
-          .multiplyScalar(f)
-          .getHex();
-        base.material = mat(damagedColor);
-      } else {
-        base.material = mat(0x8d6e63);
-      }
+    const pct = this.cellEfficiency(cell);
+    const level = pct < 0.3 ? 2 : pct < 0.7 ? 1 : 0;
+    const data = cell.mesh.userData;
+    if (data.damageLevel === level) return;
+    data.damageLevel = level;
+    const factor = [1, 0.78, 0.57][level];
+    for (const surface of data.damageSurfaces || []) {
+      surface.material = mat(new THREE.Color(surface.userData.intactColor).multiplyScalar(factor).getHex(), null, true);
     }
+    if (data.damageDetails) data.damageDetails.visible = level > 0;
+    if (data.deck) data.deck.rotation.x = level === 2 ? 0.015 : 0;
+    if (data.structure) data.structure.rotation.z = level === 2 ? 0.018 : 0;
   }
 
   repairAt(gx, gy, amount) {
+    if (!Number.isFinite(amount) || amount <= 0) return false;
     const cell = this.get(gx, gy);
     if (!cell) return false;
     const max = cell.maxHealth || BUILDINGS[cell.buildingKey].health;

@@ -100,6 +100,20 @@ run(`
   var tugPoseFixture = PlayerVis.pose;
   var flexFixture = PlayerVis.rodSegments[2].rotation.x;
   var rodTipFixture = PlayerVis.getRodTipWorld(new THREE.Vector3());
+
+  animationPlayerFixture.hook.fishing = false;
+  animationPlayerFixture.hook.returning = true;
+  animationPlayerFixture.hook.hasCatch = true;
+  animationPlayerFixture.hook.catchStartDist = 6;
+  HookVis.attachCatch(HookVis.makeFallbackFish());
+  HookVis.show(1, 1, 4, 1, animationPlayerFixture.hook);
+  var catchArcHeightFixture =
+    HookVis.line.geometry.attributes.position.getY(HookVis.lineSegments - 1);
+  var leapEntryFixture = HookVis.launchLeapingFish(5, 1, 1, 1);
+  HookVis.updateLeapingCatches(0.44, animationPlayerFixture);
+  var leapMidAirYFixture = leapEntryFixture.mesh.position.y;
+  HookVis.updateLeapingCatches(0.5, animationPlayerFixture);
+  var leapFinishedCountFixture = HookVis.leapingCatches.length;
 `);
 
 assert.ok(run('animationPartsFixture.forearmL'));
@@ -118,5 +132,82 @@ assert.ok(Math.abs(run('returnEndpointHeightFixture') - 0.38) < 0.001);
 assert.equal(run('tugPoseFixture'), 'fishing-pull');
 assert.ok(run('flexFixture > 0.05'));
 assert.ok(run('Number.isFinite(rodTipFixture.x) && Number.isFinite(rodTipFixture.y)'));
+assert.ok(run('catchArcHeightFixture > 1.2'));
+assert.ok(run('leapMidAirYFixture > 1.5'));
+assert.equal(run('leapFinishedCountFixture'), 0);
 
 console.log('✓ personaje articulado y ciclo visual completo de pesca');
+
+run(`
+  var glbBonesFixture = {};
+  for (var sideFixture of ['Right', 'Left']) {
+    var armFixture = new THREE.Bone();
+    armFixture.name = sideFixture + 'Arm';
+    armFixture.position.set(sideFixture === 'Right' ? 0.22 : -0.22, 0.9, 0);
+    PlayerVis.mesh.add(armFixture);
+    glbBonesFixture[armFixture.name] = armFixture;
+    var foreFixture = new THREE.Bone(); foreFixture.name = sideFixture + 'ForeArm';
+    foreFixture.position.y = 0.27; armFixture.add(foreFixture);
+    glbBonesFixture[foreFixture.name] = foreFixture;
+    var handFixture = new THREE.Bone(); handFixture.name = sideFixture + 'Hand';
+    handFixture.position.y = 0.23; foreFixture.add(handFixture);
+    glbBonesFixture[handFixture.name] = handFixture;
+  }
+  var neckFixture = new THREE.Bone(); neckFixture.name = 'Neck';
+  PlayerVis.mesh.add(neckFixture); glbBonesFixture.Neck = neckFixture;
+  var headFixture = new THREE.Bone(); headFixture.name = 'Head';
+  neckFixture.add(headFixture); glbBonesFixture.Head = headFixture;
+  PlayerVis.glbRig = {
+    actions: {},
+    bone: name => glbBonesFixture[name],
+    play: () => {},
+    update: () => {
+      glbBonesFixture.RightArm.rotation.set(0, 0, -1.5);
+      glbBonesFixture.LeftArm.rotation.set(0, 0, 1.5);
+      glbBonesFixture.RightForeArm.rotation.set(-0.8, 0, 0);
+      glbBonesFixture.LeftForeArm.rotation.set(-0.8, 0, 0);
+      glbBonesFixture.Head.rotation.set(1.2, 0, 0);
+    }
+  };
+  var glbPlayerFixture = { x: 1, z: 1, vx: 0, vz: 0, rowAnim: 0, hook: null };
+  var limbDirectionFixture = name => {
+    var rotation = glbBonesFixture[name].getWorldQuaternion(new THREE.Quaternion());
+    var inverseRoot = PlayerVis.mesh.getWorldQuaternion(new THREE.Quaternion()).invert();
+    return new THREE.Vector3(0, 1, 0).applyQuaternion(rotation).applyQuaternion(inverseRoot);
+  };
+  PlayerVis.fpMode = false; PlayerVis.castTime = 99;
+  PlayerVis.sync(glbPlayerFixture, 0.1, 2);
+  var idleArmsDownFixture = ['RightArm', 'LeftArm', 'RightForeArm', 'LeftForeArm']
+    .every(name => limbDirectionFixture(name).y < -0.95);
+  var idleHeadUprightFixture = limbDirectionFixture('Head').y > 0.95;
+  glbPlayerFixture.vz = 1; PlayerVis.walkTime = 0.7;
+  PlayerVis.sync(glbPlayerFixture, 0.1, 3);
+  var walkArmsDownFixture = limbDirectionFixture('RightArm').y < -0.85 &&
+    limbDirectionFixture('LeftArm').y < -0.85;
+  var walkCounterSwingFixture = limbDirectionFixture('RightArm').z * limbDirectionFixture('LeftArm').z < 0;
+  glbPlayerFixture.vz = 0; glbPlayerFixture.rowAnim = 0.48;
+  PlayerVis.sync(glbPlayerFixture, 0.1, 4);
+  var paddleVisibleFixture = PlayerVis.paddle.visible;
+  var paddleForwardFixture = limbDirectionFixture('RightForeArm').z > 0.4;
+  glbPlayerFixture.rowAnim = 0; PlayerVis.sync(glbPlayerFixture, 0.1, 5);
+  var paddleHiddenFixture = !PlayerVis.paddle.visible;
+  glbPlayerFixture.hook = { x: 3, z: 1, fishing: true };
+  PlayerVis.castTime = 99; PlayerVis.lastHook = glbPlayerFixture.hook;
+  PlayerVis.sync(glbPlayerFixture, 0.1, 6);
+  var fishingArmsForwardFixture = limbDirectionFixture('RightForeArm').z > 0.7 &&
+    limbDirectionFixture('LeftForeArm').z > 0.7 &&
+    PlayerVis.rodSegments[2].rotation.x > 0.05;
+  glbPlayerFixture.hook = null; PlayerVis.fpMode = true;
+  PlayerVis.sync(glbPlayerFixture, 0.1, 7);
+  var fpRigPreservedFixture = Math.abs(glbBonesFixture.RightArm.rotation.z + 1.5) < 0.0001;
+`);
+assert.equal(run('idleArmsDownFixture'), true);
+assert.equal(run('idleHeadUprightFixture'), true);
+assert.equal(run('walkArmsDownFixture'), true);
+assert.equal(run('walkCounterSwingFixture'), true);
+assert.equal(run('paddleVisibleFixture'), true);
+assert.equal(run('paddleForwardFixture'), true);
+assert.equal(run('paddleHiddenFixture'), true);
+assert.equal(run('fishingArmsForwardFixture'), true);
+assert.equal(run('fpRigPreservedFixture'), true);
+console.log('✓ GLB: reposo natural, brazos al caminar, palada, agarre de pesca y primera persona');

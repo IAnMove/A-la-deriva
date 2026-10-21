@@ -66,9 +66,44 @@ const Game = {
 
   raft: new Raft(),
 
-  // Sistemas
+  // Sistemas y carta náutica (chartX, chartZ en metros como fuente de verdad)
+  worldSeed: 1,
+  get seed() {
+    return Game.worldSeed;
+  },
+  set seed(value) {
+    Game.worldSeed = GameSimulation.normalizeSeed(value);
+  },
+  chartX: 0,
+  chartZ: 0,
+  chartVx: 0,
+  chartVz: 0,
+  currentSpeed: 0,
+  currentSpeedZ: 0,
+  currentVector: { x: 0.72, z: 0 },
+  windVector: { x: 0.9, z: 0, angle: 0, strength: 0.9, sailAlignment: 1, sailFactor: 1.1, label: 'popa' },
+  windAngle: 0,
+  windStrength: 0.9,
+  windX: 0.9,
+  windZ: 0,
+  windOverride: null,
+  islandX: 285.94,
+  islandZ: 90.89,
+  islandBearing: 0.308,
+  islandRevealed: false,
+  islandIntelApplied: 0,
+  rescueShipBearing: -0.62,
+  regions: [],
+  chartTrail: [{ x: 0, z: 0 }],
+  currentRegion: null,
+  regionBlend: 0,
   rescuedSignal: 0,
-  islandDistance: 2000,
+  get islandDistance() {
+    return GameSimulation.getIslandDistance(Game);
+  },
+  set islandDistance(value) {
+    GameSimulation.setIslandDistance(Game, value);
+  },
   radioIntel: 0,
   navigationIntel: 0,
   victoryCondition: null,
@@ -86,6 +121,39 @@ const Game = {
   crewConflict: { active: false },
   pendingDaySummary: null,
   pendingDayResolution: null,
+
+  initChart: (seed = null) => GameSimulation.initChart(Game, seed),
+  getCurrentAt: (x = Game.chartX, z = Game.chartZ) =>
+    GameSimulation.getCurrentAt(Game.worldSeed, x, z),
+  getWindAt: () => GameSimulation.getWindAt(Game),
+  evaluateChartRegion: () => GameSimulation.evaluateChartRegion(Game),
+  getChartSnapshot: () => GameSimulation.getChartSnapshot(Game),
+  setNavigationHeading: (heading) => {
+    const next = GameSimulation.setNavigationHeading(Game, heading);
+    GameUI.renderChartModal(Game);
+    Game.updateUI();
+    return next;
+  },
+  steerFromChartPoint: (targetX, targetZ) => {
+    if (Game.raft.countProvides('rudder') <= 0) return Game.navigationHeading;
+    const next = GameSimulation.setHeadingFromChartTarget(Game, targetX, targetZ);
+    const label = next < -0.15 ? 'babor' : next > 0.15 ? 'estribor' : 'recto';
+    Log.add(`Ajustas el rumbo en la carta náutica hacia ${label}.`);
+    GameUI.renderChartModal(Game);
+    Game.updateUI();
+    return next;
+  },
+  openChartModal: () => {
+    const panel = document.getElementById('chart-panel');
+    if (panel) panel.classList.remove('hidden');
+    Game.paused = true;
+    return GameUI.renderChartModal(Game);
+  },
+  closeChartModal: () => {
+    const panel = document.getElementById('chart-panel');
+    if (panel) panel.classList.add('hidden');
+    Game.paused = false;
+  },
 
   // Meshes auxiliares
   ghostMesh: null,
@@ -196,7 +264,7 @@ const Game = {
     }
   },
 
-  newGame: () => {
+  newGame: (seed = null) => {
     if (Game.fishing?.active) Game.cancelFishing(false);
     Game.paused = false;
     Game.day = 1;
@@ -225,7 +293,6 @@ const Game = {
     Log.clear();
 
     Game.rescuedSignal = 0;
-    Game.islandDistance = 2000;
     Game.radioIntel = 0;
     Game.navigationIntel = 0;
     Game.victoryCondition = null;
@@ -237,6 +304,8 @@ const Game = {
     Game.anchorDeployed = false;
     Game.beaconLit = false;
     Game.pendingDayResolution = null;
+    Game.initChart(typeof seed === 'number' ? seed : null);
+    GameSimulation.syncZoneFromChart(Game, true);
     Game.resetTransientState();
     Game.highlightsDirty = true;
 
@@ -302,10 +371,6 @@ const Game = {
       fog: Util.clamp(finite(data.weatherTimers?.fog), 0, 86400),
       heat: Util.clamp(finite(data.weatherTimers?.heat), 0, 86400)
     };
-    Game.storm = Game.zone === 'storm' || Game.weatherTimers.storm > 0;
-    Game.rain = Game.storm || Game.weatherTimers.rain > 0;
-    Game.fog = Game.weatherTimers.fog > 0;
-    Game.heat = Game.weatherTimers.heat > 0;
     Game.resetPlayerState(data.player);
     const savedResources = data.resources || {};
     Game.resources = {};
@@ -322,10 +387,80 @@ const Game = {
         : ''
     };
     Game.rescuedSignal = Util.clamp(finite(data.rescuedSignal), 0, 100);
-    Game.islandDistance = Util.clamp(finite(data.islandDistance, 2000), 0, 10000000);
     Game.radioIntel = Util.clamp(finite(data.radioIntel), 0, 40);
     Game.navigationIntel = Util.clamp(finite(data.navigationIntel), 0, 120);
     Game.victoryCondition = ['radio', 'island'].includes(data.victoryCondition) ? data.victoryCondition : null;
+
+    const savedSeed = finite(data.worldSeed, finite(data.seed, 1));
+    Game.initChart(savedSeed > 0 ? savedSeed : 1);
+    if (Number.isFinite(Number(data.islandX)) && Number.isFinite(Number(data.islandZ))) {
+      Game.islandX = Util.clamp(Number(data.islandX), -10000000, 10000000);
+      Game.islandZ = Util.clamp(Number(data.islandZ), -10000000, 10000000);
+      Game.islandBearing = Math.atan2(Game.islandZ, Game.islandX);
+    }
+    Game.islandRevealed =
+      data.islandRevealed === true || Game.victoryCondition === 'island';
+    Game.islandIntelApplied = Util.clamp(finite(data.islandIntelApplied), 0, 120);
+
+    if (Array.isArray(data.regions) && data.regions.length > 0) {
+      Game.regions = data.regions
+        .filter(r => r && typeof r === 'object' && CHART_REGION_TYPES.includes(r.type))
+        .slice(0, 32)
+        .map((r, idx) => ({
+          id: typeof r.id === 'string' && r.id ? r.id.slice(0, 64) : `region-${idx}`,
+          type: r.type,
+          x: Util.clamp(finite(r.x), -10000000, 10000000),
+          z: Util.clamp(finite(r.z), -10000000, 10000000),
+          radius: Util.clamp(finite(r.radius, 26), 6, 500),
+          borderWidth: Util.clamp(finite(r.borderWidth, 7), 2, 200),
+          angle: Util.clamp(finite(r.angle), -Math.PI * 2, Math.PI * 2),
+          length: Util.clamp(finite(r.length), 0, 500),
+          visited: r.visited === true,
+          discovered: r.discovered === true,
+          reefsSpawned: r.reefsSpawned === true
+        }));
+      if (Game.regions.length === 0) {
+        Game.regions = GameSimulation.buildRegions(
+          Game.worldSeed,
+          Game.islandX,
+          Game.islandZ
+        );
+      }
+    }
+
+    const hasChartCoords =
+      data.chartX !== undefined && data.chartX !== null &&
+      data.chartZ !== undefined && data.chartZ !== null &&
+      Number.isFinite(Number(data.chartX)) &&
+      Number.isFinite(Number(data.chartZ));
+    if (hasChartCoords) {
+      Game.chartX = Util.clamp(Number(data.chartX), -10000000, 10000000);
+      Game.chartZ = Util.clamp(Number(data.chartZ), -10000000, 10000000);
+    } else {
+      const legacyDist = Util.clamp(finite(data.islandDistance, 300), 0, 10000000);
+      GameSimulation.placeOnIslandLine(Game, legacyDist);
+    }
+    if (Array.isArray(data.chartTrail) && data.chartTrail.length > 0) {
+      Game.chartTrail = data.chartTrail
+        .filter(pt => pt && Number.isFinite(Number(pt.x)) && Number.isFinite(Number(pt.z)))
+        .slice(0, 160)
+        .map(pt => ({
+          x: Util.clamp(Number(pt.x), -10000000, 10000000),
+          z: Util.clamp(Number(pt.z), -10000000, 10000000)
+        }));
+      if (Game.chartTrail.length === 0) Game.chartTrail = [{ x: 0, z: 0 }];
+    } else {
+      Game.chartTrail = [{ x: 0, z: 0 }];
+    }
+    GameSimulation.syncZoneFromChart(Game, true);
+    if (!hasChartCoords && ZONES.includes(data.zone) && Game.zone === 'calm') {
+      Game.zone = data.zone;
+    }
+    Game.storm = Game.zone === 'storm' || Game.weatherTimers.storm > 0;
+    Game.rain = Game.storm || Game.weatherTimers.rain > 0;
+    Game.fog = Game.weatherTimers.fog > 0;
+    Game.heat = Game.weatherTimers.heat > 0;
+
     Game.currentObjective = Util.clamp(
       Math.floor(finite(data.currentObjective)),
       0,
@@ -577,6 +712,30 @@ const Game = {
       zoneTimer: Game.zoneTimer,
       storm: Game.storm,
       weatherTimers: Game.weatherTimers,
+      worldSeed: Game.worldSeed,
+      seed: Game.worldSeed,
+      chartX: Game.chartX,
+      chartZ: Game.chartZ,
+      islandX: Game.islandX,
+      islandZ: Game.islandZ,
+      islandRevealed: Game.islandRevealed === true,
+      islandIntelApplied: Game.islandIntelApplied || 0,
+      chartTrail: (Array.isArray(Game.chartTrail) ? Game.chartTrail : [{ x: 0, z: 0 }])
+        .slice(-160)
+        .map(pt => ({ x: Number(pt.x) || 0, z: Number(pt.z) || 0 })),
+      regions: (Game.regions || []).map(r => ({
+        id: String(r.id || ''),
+        type: String(r.type || 'debris'),
+        x: Number(r.x) || 0,
+        z: Number(r.z) || 0,
+        radius: Number(r.radius) || 26,
+        borderWidth: Number(r.borderWidth) || 7,
+        angle: Number(r.angle) || 0,
+        length: Number(r.length) || 0,
+        visited: Boolean(r.visited),
+        discovered: Boolean(r.discovered),
+        reefsSpawned: Boolean(r.reefsSpawned)
+      })),
       player: {
         x: Game.player.x, z: Game.player.z,
         health: Game.player.health, hunger: Game.player.hunger,
@@ -673,6 +832,10 @@ const Game = {
     };
     document.getElementById('close-build').onclick = () => { BuildManager.close(); Game.updateBuildMenu(); };
 
+    const contextButton = document.getElementById('btn-context-action');
+    if (contextButton) contextButton.onclick = () => {
+      if (Game.state === 'playing' && !Game.paused) { Game.interact(); Game.updateUI(); }
+    };
     document.getElementById('btn-crew').onclick = () => {
       Game.paused = true;
       document.getElementById('crew-panel').classList.remove('hidden');
@@ -693,12 +856,54 @@ const Game = {
       Game.paused = false;
     };
 
+    const closeChart = document.getElementById('close-chart');
+    if (closeChart) closeChart.onclick = () => Game.closeChartModal();
+    const btnChartPort = document.getElementById('btn-chart-port');
+    if (btnChartPort) btnChartPort.onclick = () => Game.setNavigationHeading(-1);
+    const btnChartStraight = document.getElementById('btn-chart-straight');
+    if (btnChartStraight) btnChartStraight.onclick = () => Game.setNavigationHeading(0);
+    const btnChartStarboard = document.getElementById('btn-chart-starboard');
+    if (btnChartStarboard) btnChartStarboard.onclick = () => Game.setNavigationHeading(1);
+    const btnChartRoute = document.getElementById('btn-chart-route');
+    if (btnChartRoute) {
+      btnChartRoute.onclick = () => {
+        Game.closeChartModal();
+        Game.offerIslandRoute();
+      };
+    }
+    const chartCanvas = document.getElementById('chart-canvas');
+    if (chartCanvas) {
+      chartCanvas.onclick = e => {
+        const rect = typeof chartCanvas.getBoundingClientRect === 'function'
+          ? chartCanvas.getBoundingClientRect()
+          : { left: 0, top: 0, width: chartCanvas.width || 560, height: chartCanvas.height || 340 };
+        const scaleX = (chartCanvas.width || 560) / Math.max(1, rect.width || 560);
+        const scaleY = (chartCanvas.height || 340) / Math.max(1, rect.height || 340);
+        const px = e?.offsetX != null ? e.offsetX * scaleX : ((e?.clientX || 0) - rect.left) * scaleX;
+        const py = e?.offsetY != null ? e.offsetY * scaleY : ((e?.clientY || 0) - rect.top) * scaleY;
+        const pt = GameUI.canvasToChart(px, py);
+        Game.steerFromChartPoint(pt.x, pt.z);
+      };
+    }
+
     document.getElementById('btn-summary-ok').onclick = () => {
       document.getElementById('day-summary').classList.add('hidden');
       Game.paused = false;
     };
     const fishingButton = document.getElementById('btn-fishing-pull');
-    if (fishingButton) fishingButton.onclick = Game.requestFishingPull;
+    if (fishingButton) {
+      fishingButton.onclick = e => {
+        if (e?.stopPropagation) e.stopPropagation();
+        Game.requestFishingPull();
+      };
+    }
+    const fishingPanel = document.getElementById('fishing-panel');
+    if (fishingPanel) {
+      fishingPanel.onpointerdown = e => {
+        if (e?.button != null && e.button !== 0) return;
+        Game.requestFishingPull();
+      };
+    }
     const conflictPush = document.getElementById('btn-conflict-push');
     if (conflictPush) conflictPush.onclick = Game.requestCrewConflictPush;
     const conflictRation = document.getElementById('btn-conflict-ration');
@@ -719,6 +924,8 @@ const Game = {
     document.getElementById('log-panel').classList.add('hidden');
     document.getElementById('decision-panel').classList.add('hidden');
     document.getElementById('day-summary').classList.add('hidden');
+    const chartPanel = document.getElementById('chart-panel');
+    if (chartPanel) chartPanel.classList.add('hidden');
     const conflictPanel = document.getElementById('crew-conflict-panel');
     if (conflictPanel) conflictPanel.classList.add('hidden');
     Game.crewConflict = { active: false };
@@ -731,9 +938,11 @@ const Game = {
   },
 
   menuModalOpen: () => {
+    const chartPanel = document.getElementById('chart-panel');
     return BuildManager.active ||
       !document.getElementById('crew-panel').classList.contains('hidden') ||
-      !document.getElementById('log-panel').classList.contains('hidden');
+      !document.getElementById('log-panel').classList.contains('hidden') ||
+      Boolean(chartPanel && !chartPanel.classList.contains('hidden'));
   },
 
   togglePause: () => {
@@ -752,6 +961,10 @@ const Game = {
           Save.save(Game.getSaveData());
         }
         GameUI.updateCrewOverview(Game);
+        Game.renderCrewPanel();
+      },
+      (member, kind) => {
+        Game.interactWithCrew(member, kind);
         Game.renderCrewPanel();
       }
     );
@@ -981,6 +1194,7 @@ const Game = {
       return false;
     }
     CrewManager.assignPosition(survivor, Game.raft);
+    CrewManager.signalInteraction?.(survivor, 'welcome', Game.player, 4);
     Game.stats.rescued++;
     Log.add(
       `Has rescatado a ${survivor.name} (${survivor.skill.name}). ` +
@@ -1110,7 +1324,9 @@ const Game = {
       Game.cancelFishing(true);
       return;
     }
-    if (Input.wasPressed('Space')) fishing.pullRequested = true;
+    if (Input.wasPressed('Space') || Input.mouse?.clicked) {
+      fishing.pullRequested = true;
+    }
 
     // En primera persona el panel se compacta para no tapar la vista.
     const fpPanel = document.getElementById('fishing-panel');
@@ -1154,6 +1370,9 @@ const Game = {
           ? '¡Pez asegurado!'
           : '¡Buen tirón! Prepárate para el siguiente.';
         AudioSys.play('fish-tug');
+        if (fishing.hook && typeof Particles !== 'undefined' && Particles.emit) {
+          Particles.emit(fishing.hook.x, 0.3, fishing.hook.z, '#e1f5fe', 8, 2.6);
+        }
       } else {
         fishing.misses++;
         fishing.feedback = 'miss';
@@ -1193,6 +1412,7 @@ const Game = {
     if (hook) {
       hook.fishing = false;
       hook.returning = true;
+      hook.life = 0;
     }
 
     if (success) {
@@ -1213,7 +1433,20 @@ const Game = {
         bank.fishCount = Math.max(0, bank.fishCount - 1);
         if (bank.fishCount <= 0) bank.active = false;
       }
+      if (!caughtFish && typeof HookVis !== 'undefined' && HookVis.makeFallbackFish) {
+        caughtFish = HookVis.makeFallbackFish();
+      }
+      if (hook) {
+        hook.hasCatch = true;
+        hook.catchStartDist = Math.max(
+          1.2,
+          Util.dist2(hook.x, hook.z, Game.player.x, Game.player.z)
+        );
+      }
       if (caughtFish && HookVis.attachCatch) HookVis.attachCatch(caughtFish);
+      if (hook && typeof HookVis !== 'undefined' && HookVis.launchLeapingFish) {
+        HookVis.launchLeapingFish(hook.x, hook.z, Game.player.x, Game.player.z);
+      }
       Game.showFloatingText(hook.x, hook.z, `+${Util.formatAmount(amount, 2)} comida`);
       AudioSys.play('fish-success');
       message = `${message} +${Util.formatAmount(amount, 2)} comida.`;
@@ -1421,6 +1654,9 @@ const Game = {
 
   showDecision: (title, text, options) => {
     Game.paused = true;
+    if (document.pointerLockElement && typeof document.exitPointerLock === 'function') {
+      document.exitPointerLock();
+    }
     const panel = document.getElementById('decision-panel');
     document.getElementById('decision-title').textContent = title;
     document.getElementById('decision-text').textContent = text;
@@ -1429,6 +1665,7 @@ const Game = {
     for (const opt of options) {
       const b = document.createElement('button');
       b.textContent = opt.label;
+      b.disabled = opt.disabled === true;
       b.onclick = () => {
         panel.classList.add('hidden');
         Game.paused = false;
@@ -1486,17 +1723,8 @@ const Game = {
     Game.heat = Game.weatherTimers.heat > 0;
   },
 
-  updateZone: (dt) => {
-    Game.zoneTimer -= dt;
-    if (Game.zoneTimer <= 0) {
-      Game.zoneTimer = Util.rand(40, 90);
-      const prev = Game.zone;
-      let next = Util.choice(ZONES);
-      if (prev === 'storm' && next === 'storm') next = 'calm';
-      Game.zone = next;
-      Game.showEventMessage(Game.zoneName(next));
-      Log.add(`Entras en ${Game.zoneName(next).toLowerCase()}.`);
-    }
+  updateZone: () => {
+    GameSimulation.syncZoneFromChart(Game, false);
   },
 
   zoneName: (z) => {
@@ -1614,28 +1842,19 @@ const Game = {
       Game.beaconLit = false;
       Log.add('El faro de señales se apagó al quedar inoperativo.');
     }
-    const driftBonus = CrewManager.getDriftBonus();
-    const sailEfficiency = Util.clamp(Game.raft.countProvides('sail'), 0, 1);
-    const rudderEfficiency = Util.clamp(Game.raft.countProvides('rudder'), 0, 1);
-    const motorEfficiency = Util.clamp(Game.raft.countProvides('motor'), 0, 1);
-    const sailBonus = sailEfficiency * 0.5;
-    const motorBonus = Game.victoryCondition === 'island' &&
-      (Game.resources.fuel || 0) > 0
-      ? motorEfficiency
-      : 0;
-    const loadMul = Game.loadSpeedMultiplier();
-    const anchored = Game.anchorDeployed &&
-      Game.raft.countProvides('anchor') > 0;
-    const currentSpeed = anchored
-      ? 0
-      : (0.75 + driftBonus * 0.75 + sailBonus + motorBonus + Game.rowingBoost) * loadMul;
-    const steeringSpeed = (sailBonus + motorBonus) * rudderEfficiency *
-      Game.navigationHeading * NAVIGATION_BALANCE.lateralSteering;
-    const currentSpeedZ = anchored
-      ? 0
-      : (Game.rowingBoostZ + steeringSpeed) * loadMul;
+    const velocity = GameSimulation.computeChartVelocity(Game);
+    const currentSpeed = velocity.vx;
+    const currentSpeedZ = velocity.vz;
+    if (Game._routeFixGrace > 0 && dt < 0.1) {
+      Game._routeFixGrace = Math.max(0, Game._routeFixGrace - dt);
+    } else {
+      Game._routeFixGrace = 0;
+      Game.chartX += currentSpeed * dt;
+      Game.chartZ += currentSpeedZ * dt;
+    }
     Game.worldOffset += currentSpeed * dt;
     Game.worldOffsetZ += currentSpeedZ * dt;
+    GameSimulation.syncZoneFromChart(Game, false);
 
     const center = Game.raft.getCenter();
     const hazardTargets = Game.getHazardTargets();
@@ -1868,8 +2087,21 @@ const Game = {
 
   offerRadioRoute: () => GameSimulation.offerRadioRoute(Game),
 
+  getInteractionContext: () => GameActions.context(Game),
+
+  interactWithCrew: (member, kind) => GameActions.interactWithCrew(Game, member, kind),
+
   interact: () => {
     const p = Game.player;
+    const context = Game.getInteractionContext();
+    if (context?.kind === 'crew') {
+      GameActions.openCrew(Game, context.member);
+      return;
+    }
+    if (p.hook && !Game.raft.selected) {
+      p.hook.returning = true;
+      return;
+    }
 
     // Desmontar celda seleccionada
     if (Game.raft.selected) {
@@ -1908,10 +2140,16 @@ const Game = {
     const efficiency = Game.raft.cellEfficiency(cell);
 
     // Una estructura dañada se repara antes de ejecutar su acción especial.
-    if (cell.health < maxHealth && Game.resources.wood >= 1) {
+    if (cell.health < maxHealth) {
+      if (Game.resources.wood < 1) {
+        Game.showFloatingText(p.x, p.z, 'Necesitas 1 madera para reparar', '#ef5350');
+        return;
+      }
       Game.resources.wood -= 1;
       Game.raft.repairAt(gx, gy, 15);
-      Game.showFloatingText(p.x, p.z, 'Reparado');
+      Game.showFloatingText(p.x, p.z, 'Reparado · ' + Math.ceil(cell.health) + '/' + maxHealth + ' estructura');
+      Particles.emit(p.x, 0.5, p.z, '#d6b17d', 8, 1.2);
+      Game.updateUI();
       AudioSys.play('build');
       return;
     }
@@ -1921,7 +2159,17 @@ const Game = {
       return;
     }
 
-    if (b.key === 'fire' || b.key === 'kitchen') {
+    if (b.key === 'rain' || b.key === 'purifier') {
+      if (p.thirst >= 100) Game.showFloatingText(p.x, p.z, 'Ya has bebido suficiente');
+      else if (Game.resources.water < 0.5) Game.showFloatingText(p.x, p.z, 'Necesitas 0,5 agua', '#ef5350');
+      else {
+        Game.resources.water -= 0.5;
+        p.thirst = Math.min(100, p.thirst + 20 * efficiency);
+        Game.showFloatingText(p.x, p.z, 'Agua bebida · −0,5 agua', '#67d8ff');
+        AudioSys.play('collect');
+        Game.updateUI();
+      }
+    } else if (b.key === 'fire' || b.key === 'kitchen') {
       if (Game.resources.food >= 1) {
         Game.resources.food -= 1;
         const isKitchen = b.key === 'kitchen';
@@ -1973,7 +2221,8 @@ const Game = {
         Game.showFloatingText(p.x, p.z, 'Infección tratada', '#66bb6a');
         Log.add('La enfermería detuvo la infección.');
         AudioSys.play('collect');
-      } else if (Game.resources.cloth >= 1 && Game.player.health < 100) {
+      } else if ((!isInfirmary || Game.infectionDays <= 0) &&
+          Game.resources.cloth >= 1 && Game.player.health < 100) {
         Game.resources.cloth -= 1;
         const healing = Math.round((isInfirmary ? 34 : 25) * efficiency);
         Game.player.health = Math.min(100, Game.player.health + healing);
@@ -1986,6 +2235,7 @@ const Game = {
       }
     } else if (b.key === 'anchor') {
       Game.anchorDeployed = !Game.anchorDeployed;
+      GameSimulation.computeChartVelocity(Game);
       const state = Game.anchorDeployed ? 'desplegada' : 'recogida';
       Game.showFloatingText(p.x, p.z, `Ancla ${state}`, '#4fc3f7');
       Log.add(`El ancla queda ${state}.`);
@@ -2035,6 +2285,7 @@ const Game = {
         : 'Aún no has fijado una ruta a tierra.';
       Game.showFloatingText(p.x, p.z, route, '#4fc3f7');
       Log.add(`La mesa de navegación confirma el rumbo. ${route}`);
+      Game.openChartModal();
     } else if (b.key === 'containment') {
       const restrained = CrewManager.members.filter(member =>
         member.alive && member.restrainedDays > 0
@@ -2058,6 +2309,7 @@ const Game = {
           ? index
           : best, 0);
       Game.navigationHeading = headings[(currentIndex + 1) % headings.length];
+      GameSimulation.computeChartVelocity(Game);
       const label = Game.navigationHeading < 0 ? 'babor' : (Game.navigationHeading > 0 ? 'estribor' : 'recto');
       Game.showFloatingText(p.x, p.z, `Rumbo: ${label}`, '#4fc3f7');
       Log.add(`El timón fija el rumbo hacia ${label}.`);
